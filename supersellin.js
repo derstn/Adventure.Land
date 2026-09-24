@@ -1,12 +1,47 @@
 // --- MERCHANT SCRIPT (SuperSellin) ---
 performance_trick();
-use_hp_or_mp();
+
+setInterval(() => {
+    if (character.rip) return;
+    if (is_on_cooldown("use_hp")) return;
+
+    // Prioritize emergency HP potion if below 70%
+    if (character.hp < character.max_hp * 0.7) {
+        use_skill("use_hp");
+    } 
+    // Restore MP if below 50% (important for casting MLuck on the party)
+    else if (character.mp < character.max_mp * 0.5) {
+        use_skill("use_mp");
+    } 
+    // Fallback to free regen if lightly damaged or missing small MP
+    else if (character.hp < character.max_hp) {
+        use_skill("regen_hp");
+    } else if (character.mp < character.max_mp) {
+        use_skill("regen_mp");
+    }
+}, 500);
+
 const CONFIG = {
     townSpot: { map: "main", x: -20, y: -70 },
     vendorTarget: "potions",
+    scrollTarget: "scrolls",
     tankName: "DerstnTanks",
     authorizedParty: ["Derstn", "DerstnTanks", "DerstnHeals", "DerstnMage"],
-    patrolIntervalMs: 10 * 60 * 1000 // 6 minutes
+    patrolIntervalMs: 30 * 60 * 1000 // 30 minutes
+};
+
+const COMPOUND_CONFIG = {
+    accessoryTypes: [
+        "strring", "dexring", "intring", // Rings
+        "strbelt", "dexbelt", "intbelt"  // Belts
+    ],
+    maxLevel: 3, // Compounding stops once +3 is achieved
+    scrollTiers: {
+        0: "cscroll0", // +0 -> +1
+        1: "cscroll0", // +1 -> +2
+        2: "cscroll1"  // +2 -> +3 (Change to "cscroll0" if you want to use basic scrolls)
+    },
+    delayBetweenActions: 1000
 };
 
 const EX_CONFIG = {
@@ -16,15 +51,15 @@ const EX_CONFIG = {
     delayBetweenExchanges: 1200
 };
 
-// Expand junk to include common cave/desert drops
 const JUNK_ITEMS = [
     "hpbelt", "hpamulet", "cshirt", "pants1",
-    "stinger", "ringsj", "gloves", "helmet", "poker", "partyhat", "shoes", "confetti", "cake", "vitring", "wattire", "coat", "pants", "wbreeches", "wgloves", "wshoes"];
+    "stinger", "ringsj", "gloves", "helmet", "poker", "partyhat", "shoes", "confetti", "cake", "vitring", "wattire", "coat", "pants", "wbreeches", "wgloves", "wshoes", "wcap", "cclaw"
+];
 
 let deliveryQueue = [];
 let isBusy = false;
 
-// 1. Maintain MLuck & Auto-loot
+// 1. Maintain Self MLuck & Auto-loot
 setInterval(() => {
     loot();
     if (!character.s?.mluck && !is_on_cooldown("mluck")) {
@@ -35,11 +70,10 @@ setInterval(() => {
 // Open merchant stand if not already open
 function openStand() {
     if (!character.stand) {
-        // In AL, opening a stand uses open_merchant() or open_stand()
         if (typeof open_stand === "function") {
             open_stand();
         } else if (parent && parent.open_merchant) {
-            parent.open_merchant(0); // 0 corresponds to the standard stand appearance
+            parent.open_merchant(0);
         }
         set_message("Shop Open");
     }
@@ -54,12 +88,11 @@ async function closeStand() {
             parent.close_merchant();
         }
         set_message("Packing Shop");
-        // Give the server 300ms to clear the stand state before pathfinding
         await new Promise(resolve => setTimeout(resolve, 300));
     }
 }
 
-// Helper: Count quantity of an item
+// Helpers
 function countItem(name) {
     let total = 0;
     for (let slot of character.items) {
@@ -68,19 +101,16 @@ function countItem(name) {
     return total;
 }
 
-// Helper: Count empty bag slots
 function getFreeSlots() {
     return character.items.filter(slot => !slot).length;
 }
 
-// Helper: Find item slot for exchange
 function findExchangeItemSlot() {
     return character.items.findIndex(item => 
         item && EX_CONFIG.itemsToExchange.includes(item.name)
     );
 }
 
-// Helper: Find NPC entity
 function findNpc(id) {
     for (let entityId in parent.entities) {
         let entity = parent.entities[entityId];
@@ -89,6 +119,31 @@ function findNpc(id) {
         }
     }
     return null;
+}
+
+// Helper: Refresh MLuck on any party member missing it or with < 30 minutes remaining
+async function refreshPartyMLuck() {
+    const THIRTY_MINUTES_MS = 30 * 60 * 1000;
+
+    for (let name of CONFIG.authorizedParty) {
+        let p = get_player(name);
+        if (!p || character.rip) continue;
+
+        let mluckRemaining = p.s?.mluck ? (p.s.mluck.ms || 0) : 0;
+
+        if (mluckRemaining < THIRTY_MINUTES_MS) {
+            while (is_on_cooldown("mluck")) {
+                await new Promise(r => setTimeout(r, 100));
+            }
+
+            if (character.mp >= 10 && distance(character, p) <= 320) {
+                set_message(`MLuck -> ${name}`);
+                use_skill("mluck", p);
+                game_log(`Refreshed MLuck on ${name} (${Math.round(mluckRemaining / 60000)}m left)`);
+                await new Promise(r => setTimeout(r, 400));
+            }
+        }
+    }
 }
 
 // 2. Auto-sell Junk Drops
@@ -107,7 +162,61 @@ function sellJunk() {
 }
 setInterval(sellJunk, 5000);
 
-// 3. Exchange Routine (Executed safely when in town)
+// --- AUTO-COMPOUNDING ACCESSORIES (+0 -> +3) ---
+function findCompoundSet() {
+    for (let itemName of COMPOUND_CONFIG.accessoryTypes) {
+        for (let lvl = 0; lvl < COMPOUND_CONFIG.maxLevel; lvl++) {
+            let matches = [];
+            for (let i = 0; i < character.items.length; i++) {
+                let it = character.items[i];
+                if (it && it.name === itemName && (it.level || 0) === lvl) {
+                    matches.push(i);
+                    if (matches.length === 3) {
+                        return { name: itemName, level: lvl, slots: matches };
+                    }
+                }
+            }
+        }
+    }
+    return null;
+}
+
+async function executeCompoundingRoutine() {
+    let set = findCompoundSet();
+    if (!set) return;
+
+    set_message("Compounding Gear");
+    game_log(`Beginning accessory compounding run...`);
+
+    while (set && !character.rip) {
+        let scrollNeeded = COMPOUND_CONFIG.scrollTiers[set.level] || "cscroll0";
+        let scrollSlot = character.items.findIndex(it => it && it.name === scrollNeeded);
+
+        if (scrollSlot === -1) {
+            set_message(`Buying ${scrollNeeded}`);
+            await smart_move({ to: CONFIG.scrollTarget });
+            await buy(scrollNeeded, 5);
+            await new Promise(r => setTimeout(r, 600));
+            scrollSlot = character.items.findIndex(it => it && it.name === scrollNeeded);
+            if (scrollSlot === -1) {
+                game_log(`Failed to acquire ${scrollNeeded}. Halting compounding.`);
+                break;
+            }
+        }
+
+        while (character.q && character.q.compound) {
+            await new Promise(r => setTimeout(r, 250));
+        }
+
+        game_log(`Compounding ${set.name} to +${set.level + 1}...`);
+        await compound(set.slots[0], set.slots[1], set.slots[2], scrollSlot);
+        await new Promise(r => setTimeout(r, COMPOUND_CONFIG.delayBetweenActions));
+
+        set = findCompoundSet();
+    }
+}
+
+// 4. Exchange Routine (Executed safely in town)
 async function executeExchangeRoutine() {
     if (findExchangeItemSlot() === -1) return;
 
@@ -147,7 +256,7 @@ async function executeExchangeRoutine() {
     }
 }
 
-// 4. Listen for CM Calls
+// 5. Listen for CM Calls
 function on_cm(name, data) {
     if (!CONFIG.authorizedParty.includes(name)) return;
 
@@ -184,7 +293,7 @@ function on_cm(name, data) {
     }
 }
 
-// 5. 6-Minute Regular Patrol Sweep
+// 6. Patrol Timer Sweep
 setInterval(() => {
     if (!deliveryQueue.some(t => t.type === "patrol")) {
         deliveryQueue.push({ type: "patrol" });
@@ -196,8 +305,9 @@ async function processQueue() {
     if (isBusy || character.rip) return;
 
     const hasExchangeItems = findExchangeItemSlot() !== -1;
-    if (deliveryQueue.length === 0 && !hasExchangeItems) {
-        // If idle in town and not moving, keep the shop open
+    const hasCompounds = findCompoundSet() !== null;
+
+    if (deliveryQueue.length === 0 && !hasExchangeItems && !hasCompounds) {
         if (character.map === CONFIG.townSpot.map && 
             distance(character, CONFIG.townSpot) < 50 && 
             !character.moving) {
@@ -210,7 +320,6 @@ async function processQueue() {
     const task = deliveryQueue.shift();
 
     try {
-        // 1. Pack up the shop before departing
         await closeStand();
 
         if (task && task.type === "delivery") {
@@ -253,6 +362,9 @@ async function processQueue() {
                 }
             }
 
+            // Also top off MLuck during potion deliveries
+            await refreshPartyMLuck();
+
             set_message("Collecting Loot");
             loot();
             await new Promise(resolve => setTimeout(resolve, 7000));
@@ -276,13 +388,8 @@ async function processQueue() {
             if (targetLoc) {
                 await smart_move(targetLoc);
 
-                for (let name of CONFIG.authorizedParty) {
-                    let p = get_player(name);
-                    if (p && !p.s?.mluck && !is_on_cooldown("mluck")) {
-                        use_skill("mluck", p);
-                        break;
-                    }
-                }
+                // Top off MLuck on all party members with < 30 minutes left
+                await refreshPartyMLuck();
 
                 set_message("Collecting Loot");
                 loot();
@@ -290,18 +397,24 @@ async function processQueue() {
             }
         }
 
-        // 2. Return to town, vendor junk, and handle exchanges
+        // --- Town Sequence: Vendor -> Compound Accessories -> Exchanges ---
         set_message("Returning Town");
         await smart_move(CONFIG.townSpot);
         sellJunk();
 
+        // 1. Process Accessories (+0 through +2)
+        if (findCompoundSet()) {
+            await executeCompoundingRoutine();
+        }
+
+        // 2. Process Parcel & Gift Exchanges
         if (findExchangeItemSlot() !== -1) {
             await executeExchangeRoutine();
             await smart_move(CONFIG.townSpot);
             sellJunk();
         }
 
-        // 3. Reopen shop while parked at the town spot
+        // Reopen merchant stand
         openStand();
 
     } catch (err) {
