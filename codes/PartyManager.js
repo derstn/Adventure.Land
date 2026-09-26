@@ -11,6 +11,18 @@ var PARTY_CONFIG = {
     members: ["Derstn", "DerstnHeals", "DerstnTanks", "SuperSellin"]
 };
 
+// Re-send an invite/request at most this often per character, so an unaccepted one
+// doesn't pop up on the other character every few seconds.
+var PARTY_RETRY_MS = 15000;
+var partyLastSent = {};
+
+function partyThrottled(key) {
+    let now = Date.now();
+    if (partyLastSent[key] && now - partyLastSent[key] < PARTY_RETRY_MS) return true;
+    partyLastSent[key] = now;
+    return false;
+}
+
 function maintainParty() {
     if (character.rip) return;
 
@@ -18,11 +30,15 @@ function maintainParty() {
         let currentParty = get_party() || {};
         for (let name of PARTY_CONFIG.members) {
             if (name === character.name || currentParty[name]) continue;
-            if (get_player(name)) send_party_invite(name);
+            if (get_player(name) && !partyThrottled("invite:" + name)) {
+                send_party_invite(name).catch(function () {});
+            }
         }
     } else if (character.party !== PARTY_CONFIG.leader) {
         if (character.party) leave_party(); // in the wrong party - bail out first
-        else if (get_player(PARTY_CONFIG.leader)) send_party_request(PARTY_CONFIG.leader);
+        else if (get_player(PARTY_CONFIG.leader) && !partyThrottled("request")) {
+            send_party_request(PARTY_CONFIG.leader).catch(function () {});
+        }
     }
 }
 setInterval(maintainParty, 3000);

@@ -40,7 +40,11 @@ const COMPOUND_CONFIG = {
     accessoryTypes: [
         "stramulet", "dexamulet", "intamulet",
     ],
-    maxLevel: 3, // Compounding stops once +3 is achieved
+    maxLevel: 3, // Items at this level are never compounded further
+    // Stop compounding a type once the merchant holds this many finished (+maxLevel) items of it
+    // (one per combat character). Goes back to compounding if you take them out of the merchant's bags.
+    goalCount: { stramulet: 1, dexamulet: 1, intamulet: 1 },
+    maxAttemptsPerHour: 60, // rolling cap on compound calls (one +3 needs 13+ successful calls from +0s); frees up as calls age past an hour
     scrollTiers: {
         0: "cscroll0", // +0 -> +1
         1: "cscroll0", // +1 -> +2
@@ -160,8 +164,27 @@ function sellJunk() {
 setInterval(sellJunk, 5000);
 
 // --- AUTO-COMPOUNDING ACCESSORIES (+0 -> +3) ---
+let compoundTimes = []; // timestamps of recent compound calls (in memory, cleared on CODE restart)
+
+function recentCompoundAttempts() {
+    let cutoff = Date.now() - 60 * 60 * 1000;
+    compoundTimes = compoundTimes.filter(t => t > cutoff);
+    return compoundTimes.length;
+}
+
+function countAtLevel(name, level) {
+    return character.items.filter(it => it && it.name === name && (it.level || 0) === level).length;
+}
+
+function goalReached(name) {
+    let goal = COMPOUND_CONFIG.goalCount[name] || 1;
+    return countAtLevel(name, COMPOUND_CONFIG.maxLevel) >= goal;
+}
+
 function findCompoundSet() {
+    if (recentCompoundAttempts() >= COMPOUND_CONFIG.maxAttemptsPerHour) return null;
     for (let itemName of COMPOUND_CONFIG.accessoryTypes) {
+        if (goalReached(itemName)) continue;
         for (let lvl = 0; lvl < COMPOUND_CONFIG.maxLevel; lvl++) {
             let matches = [];
             for (let i = 0; i < character.items.length; i++) {
@@ -206,10 +229,14 @@ async function executeCompoundingRoutine() {
         }
 
         game_log(`Compounding ${set.name} to +${set.level + 1}...`);
+        compoundTimes.push(Date.now());
         await compound(set.slots[0], set.slots[1], set.slots[2], scrollSlot);
         await new Promise(r => setTimeout(r, COMPOUND_CONFIG.delayBetweenActions));
 
         set = findCompoundSet();
+    }
+    if (recentCompoundAttempts() >= COMPOUND_CONFIG.maxAttemptsPerHour) {
+        game_log(`Compound cap (${COMPOUND_CONFIG.maxAttemptsPerHour}/hour) reached; resumes as attempts age out.`);
     }
 }
 
