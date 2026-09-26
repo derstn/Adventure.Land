@@ -330,8 +330,8 @@ async function processQueue() {
             if (buyHp > 0 || buyMp > 0) {
                 set_message("Buying Pots");
                 await smart_move({ to: CONFIG.vendorTarget });
-                if (buyHp > 0) buy("hpot1", buyHp);
-                if (buyMp > 0) buy("mpot1", buyMp);
+                if (buyHp > 0) await buy("hpot1", buyHp);
+                if (buyMp > 0) await buy("mpot1", buyMp);
             }
 
             set_message(`To ${task.recipient}`);

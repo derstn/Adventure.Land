@@ -1,11 +1,13 @@
 // --- RANGER SCRIPT (Derstn) ---
 performance_trick();
+mode_resolve_all(); // action failures (cooldown, out of range) fulfill with {failed, reason} instead of rejecting unhandled
 
 // Shared account CODE slots (see adventureland/codes/): party management,
 // merchant mule offload, and potion-request logic are identical across
 // characters, so they live in one place instead of being copy-pasted.
 load_code("PartyManager");
 load_code("Utils");
+load_code("Targets");
 load_code("CombatSupport");
 
 const CONFIG = {
@@ -13,11 +15,8 @@ const CONFIG = {
     lootInterval: 500,
     tankName: "DerstnTanks",
     merchantName: "SuperSellin",
-    targetTypes: ["scorpion"],
     useSupershot: true,
     use3shot: true,
-    followDistance: 120, // Start following if tank gets further than this
-    stopDistance: 80     // Stop following once within this radius
 };
 
 let lastHuntersMarkTime = 0;
@@ -47,37 +46,23 @@ function managePotions() {
     else if (character.mp < character.max_mp) use_skill("regen_mp");
 }
 
-// Follow Tank Formation
-function handleFollow(tank) {
-    if (!tank || tank.rip) return false;
-
-    let dist = distance(character, tank);
-    let targetX = tank.x - 35;
-    let targetY = tank.y - 35;
-
-    // Follow if tank pulled away
-    if (dist > CONFIG.followDistance) {
-        if (!character.moving || distance(character, { x: targetX, y: targetY }) > 20) {
-            move(targetX, targetY);
-        }
-        return true; // Busy catching up
-    }
-    return false;
-}
-
-// Target Resolution: Assist Tank
+// Target Resolution: see FARM_CONFIG.mode in the shared Targets slot
 function getTarget(tank) {
+    if (FARM_CONFIG.mode === "free_for_all") {
+        // Hunt the nearest snake inside the roam circle around the tank (walking to it if needed)
+        if (!tank || tank.rip) return nearestFarmMob(character.range);
+        let roam = STATION_CONFIG.freeForAllLeash;
+        let current = get_targeted_monster();
+        if (isValidFarmMob(current) && distance(tank, current) <= roam) return current;
+        return nearestFarmMobNear(tank, roam);
+    }
+
+    // support_tank: only ever attack what the tank is attacking
     if (tank) {
         let tankTarget = get_target_of(tank);
         if (tankTarget && !tankTarget.dead) return tankTarget;
     }
-
-    let current = get_targeted_monster();
-    if (current && !current.dead && distance(character, current) <= character.range) {
-        return current;
-    }
-
-    return get_nearest_monster({ type: CONFIG.targetTypes[0], path_check: true });
+    return null;
 }
 
 // Combat Skills
@@ -112,12 +97,12 @@ function handleSkills(target) {
         const cost3Shot = (G.skills["3shot"] && G.skills["3shot"].mp) || 200;
 
         if (!is_on_cooldown("3shot") && character.mp >= cost3Shot && dist <= character.range) {
-            // Built-in helper is pre-sorted nearest-first and already excludes
-            // invincible/dead/party/guild entities, unlike a manual entity scan.
-            let targets = get_nearby_hostiles({ range: character.range - 2, limit: 3 });
+            // In support_tank mode, extra targets must already be aggroed on the tank.
+            let onlyTargeting = FARM_CONFIG.mode === "support_tank" ? CONFIG.tankName : null;
+            let extras = farmMobsInRange(character.range - 2, 2, onlyTargeting, target.id);
 
-            if (targets.length >= 2) {
-                use_skill("3shot", targets);
+            if (extras.length >= 1) {
+                use_skill("3shot", [target].concat(extras));
                 return;
             }
         }
@@ -130,14 +115,12 @@ setInterval(() => {
     if (character.rip) return;
 
     let tank = get_player(CONFIG.tankName);
-
-    // Prioritize catching up to tank if moving across map
-    let isCatchingUp = handleFollow(tank);
-    if (isCatchingUp && distance(character, tank) > CONFIG.followDistance * 1.5) {
-        return; // Don't stop to shoot if tank is running far ahead
-    }
-
     let target = getTarget(tank);
+
+    // Stay with the tank (positioning rules live in the shared Targets slot)
+    rangerStation(tank, target);
+    if (tooFarFromTank(tank)) return; // Don't stop to shoot if the tank is running far ahead
+
     if (!target) return;
 
     if (get_targeted_monster() !== target) change_target(target);

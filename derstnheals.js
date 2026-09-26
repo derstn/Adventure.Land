@@ -1,11 +1,13 @@
 // --- PRIEST SCRIPT (DerstnHeals) ---
 performance_trick();
+mode_resolve_all(); // action failures (cooldown, out of range) fulfill with {failed, reason} instead of rejecting unhandled
 
 // Shared account CODE slots (see adventureland/codes/): party management,
 // merchant mule offload, and potion-request logic are identical across
 // characters, so they live in one place instead of being copy-pasted.
 load_code("PartyManager");
 load_code("Utils");
+load_code("Targets");
 load_code("CombatSupport");
 
 const CONFIG = {
@@ -14,8 +16,7 @@ const CONFIG = {
     tankName: "DerstnTanks",
     merchantName: "SuperSellin",
     healThreshold: 0.85,
-    partyHealThreshold: 0.65,
-    followDistance: 110
+    partyHealThreshold: 0.65
 };
 
 // Periodic auto-looting
@@ -32,7 +33,7 @@ function getLowestPartyMember() {
     let lowest = character;
     let lowestPct = character.hp / character.max_hp;
 
-    for (let name of parent.party_list) {
+    for (let name of partyNames()) {
         let member = get_player(name);
         if (!member || member.rip) continue;
 
@@ -45,20 +46,6 @@ function getLowestPartyMember() {
     return { member: lowest, pct: lowestPct };
 }
 
-function handleFollow(tank) {
-    if (!tank || tank.rip) return;
-
-    let dist = distance(character, tank);
-    let targetX = tank.x + 35;
-    let targetY = tank.y - 35;
-
-    if (dist > CONFIG.followDistance) {
-        if (!character.moving || distance(character, { x: targetX, y: targetY }) > 20) {
-            move(targetX, targetY);
-        }
-    }
-}
-
 // Main Priest Loop
 setInterval(() => {
     managePotions();
@@ -66,13 +53,27 @@ setInterval(() => {
 
     let tank = get_player(CONFIG.tankName);
 
-    // Follow tank formation
-    handleFollow(tank);
-
-    // 1. Healing Priority (takes precedence over damage even while moving)
     let targetHeal = getLowestPartyMember();
 
-    if (targetHeal.pct < CONFIG.partyHealThreshold && !is_on_cooldown("partyheal") && character.mp >= 400) {
+    let mob = null;
+    if (FARM_CONFIG.mode === "free_for_all") {
+        mob = tank && !tank.rip
+            ? nearestFarmMobNear(tank, STATION_CONFIG.freeForAllLeash)
+            : nearestFarmMob(character.range);
+    } else {
+        mob = tank && get_target_of(tank);
+    }
+
+    // Positioning rules live in the shared Targets slot. In free_for_all, break off hunting
+    // to walk back toward a party member who needs a heal but is out of heal range.
+    let needsHealWalk = targetHeal.member !== character && targetHeal.pct < CONFIG.healThreshold
+        && !can_heal(targetHeal.member);
+    priestStation(tank, mob, needsHealWalk ? targetHeal.member : null);
+
+    // 1. Healing Priority (takes precedence over damage even while moving)
+
+    const partyHealCost = (G.skills.partyheal && G.skills.partyheal.mp) || 400;
+    if (targetHeal.pct < CONFIG.partyHealThreshold && !is_on_cooldown("partyheal") && character.mp >= partyHealCost) {
         use_skill("partyheal");
         return;
     }
@@ -82,11 +83,8 @@ setInterval(() => {
         return;
     }
 
-    // 2. DPS Assist if party is stable
-    if (tank) {
-        let mob = get_target_of(tank);
-        if (mob && can_attack(mob) && distance(character, mob) <= character.range) {
-            attack(mob);
-        }
+    // 2. DPS if party is stable
+    if (mob && !mob.dead && can_attack(mob) && distance(character, mob) <= character.range) {
+        attack(mob);
     }
 }, CONFIG.loopInterval);

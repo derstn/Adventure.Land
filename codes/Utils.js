@@ -8,3 +8,8 @@ function countItem(name) {
     }
     return total;
 }
+
+// Names of everyone in the current party (including this character).
+function partyNames() {
+    return Object.keys(get_party() || {});
+}

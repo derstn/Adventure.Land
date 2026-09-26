@@ -1,19 +1,19 @@
 // --- WARRIOR SCRIPT (DerstnTanks) ---
 performance_trick();
+mode_resolve_all(); // action failures (cooldown, out of range) fulfill with {failed, reason} instead of rejecting unhandled
 
 // Shared account CODE slots (see adventureland/codes/): party management,
 // merchant mule offload, and potion-request logic are identical across
 // characters, so they live in one place instead of being copy-pasted.
 load_code("PartyManager");
 load_code("Utils");
+load_code("Targets");
 load_code("CombatSupport");
 
 const CONFIG = {
     loopInterval: 250,
     lootInterval: 500,
-    merchantName: "SuperSellin",
-    targetTypes: ["phoenix", "snake", "osnake"], // Update to your active mob
-    partyMembers: ["Derstn", "DerstnHeals", "DerstnMage", "SuperSellin"]
+    merchantName: "SuperSellin"
 };
 
 setInterval(() => { loot(); }, CONFIG.lootInterval);
@@ -56,56 +56,59 @@ function maintainElixir() {
 }
 setInterval(maintainElixir, 5000);
 
-// Aggro Control: Taunt any mob attacking squishy party members
+// Aggro Control (Taunt). support_tank: peel every mob attacking a party member.
+// free_for_all: pure damage - only peel mobs attacking a member whose HP is low.
+const PEEL_HP_THRESHOLD = 0.5;
+let lastPeelId = null;
+
+function endangeredMembers() {
+    let names = [];
+    for (let name of partyNames()) {
+        if (name === character.name) continue;
+        let member = get_player(name);
+        if (member && !member.rip && member.hp / member.max_hp < PEEL_HP_THRESHOLD) names.push(name);
+    }
+    return names;
+}
+
 function checkAggro() {
     if (is_on_cooldown("taunt") || character.mp < 40) return;
+
+    let protect = FARM_CONFIG.mode === "free_for_all"
+        ? endangeredMembers()
+        : PARTY_CONFIG.members.filter(name => name !== character.name);
+    if (!protect.length) return;
 
     for (let id in parent.entities) {
         let entity = parent.entities[id];
         if (entity.type !== "monster" || entity.dead) continue;
 
-        if (CONFIG.partyMembers.includes(entity.target)) {
-            if (distance(character, entity) <= 200) {
-                use_skill("taunt", entity);
-                change_target(entity);
-                return;
-            }
+        if (protect.includes(entity.target) && distance(character, entity) <= 200) {
+            use_skill("taunt", entity);
+            change_target(entity);
+            lastPeelId = entity.id;
+            return;
         }
     }
 }
 
-// Target Selection (Ignores outside tags)
+// Target Selection (type list + outsider-tag filtering live in the shared Targets slot).
+// support_tank: sticky on the current valid target, otherwise nearest valid farm mob.
+// free_for_all: pure damage - go for mobs nobody has aggro on; only fall back to a mob
+// already aggroed on a party member when nothing free is visible (or a Taunt peel picked it).
+function isUnclaimed(mob) {
+    return !mob.target || mob.target === character.name;
+}
+
 function getValidTankTarget() {
     let current = get_targeted_monster();
-
-    // Verify current target is still valid, alive, and not tagged by an outsider
-    if (current && !current.dead && CONFIG.targetTypes.includes(current.mtype)) {
-        if (!current.target || current.target === character.name || parent.party_list.includes(current.target)) {
-            return current;
-        }
+    if (FARM_CONFIG.mode !== "free_for_all") {
+        if (isValidFarmMob(current)) return current;
+        return nearestFarmMob();
     }
 
-    let bestTarget = null;
-    let minDistance = Infinity;
-
-    for (let id in parent.entities) {
-        let entity = parent.entities[id];
-        if (entity.type !== "monster" || entity.dead) continue;
-        if (!CONFIG.targetTypes.includes(entity.mtype)) continue;
-
-        // Skip mobs that are locked onto a player NOT in our party
-        if (entity.target && entity.target !== character.name && !parent.party_list.includes(entity.target)) {
-            continue;
-        }
-
-        let dist = distance(character, entity);
-        if (dist < minDistance) {
-            minDistance = dist;
-            bestTarget = entity;
-        }
-    }
-
-    return bestTarget;
+    if (isValidFarmMob(current) && (isUnclaimed(current) || current.id === lastPeelId)) return current;
+    return nearestFarmMob(null, isUnclaimed) || nearestFarmMob();
 }
 
 // Main Combat Loop
