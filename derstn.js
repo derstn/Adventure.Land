@@ -8,8 +8,7 @@ const CONFIG = {
     merchantName: "SuperSellin",
     targetTypes: ["scorpion"],
     useSupershot: true,
-	use3shot: true,
-    usePiercingShot: true,
+    use3shot: true,
     followDistance: 120, // Start following if tank gets further than this
     stopDistance: 80     // Stop following once within this radius
 };
@@ -138,21 +137,23 @@ function handleSkills(target) {
         }
     }
 
-    // Supershot
+    // Supershot — real range is character.range * range_multiplier + range_bonus (3x + 20), not 1.5x
     if (CONFIG.useSupershot) {
-        const superCost = (G.skills.supershot && G.skills.supershot.mp) || 400;
-        if (!is_on_cooldown("supershot") && character.mp >= superCost && dist <= (character.range * 1.5)) {
+        const superSkill = G.skills.supershot || {};
+        const superCost = superSkill.mp || 400;
+        const superRange = character.range * (superSkill.range_multiplier || 3) + (superSkill.range_bonus || 20);
+        if (!is_on_cooldown("supershot") && character.mp >= superCost && dist <= superRange) {
             use_skill("supershot", target);
             return;
         }
     }
-	
-	// 3-Shot
+
+    // 3-Shot — deals 0.7x damage per target, so it's only a DPS gain with 2+ monsters in range.
+    // Against a single target it's strictly worse than a normal attack (0.7x vs 1x), so skip it there.
     if (CONFIG.use3shot) {
         const cost3Shot = (G.skills["3shot"] && G.skills["3shot"].mp) || 200;
-        
+
         if (!is_on_cooldown("3shot") && character.mp >= cost3Shot && dist <= character.range) {
-            // Find up to 2 additional nearby monsters to maximize the skill
             let targets = [target];
             for (let id in parent.entities) {
                 let entity = parent.entities[id];
@@ -164,17 +165,10 @@ function handleSkills(target) {
                 }
             }
 
-            use_skill("3shot", targets);
-            return;
-        }
-    }
-
-    // Piercing Shot
-    if (CONFIG.usePiercingShot) {
-        const pierceCost = (G.skills.piercingshot && G.skills.piercingshot.mp) || 64;
-        if (!is_on_cooldown("piercingshot") && character.mp >= pierceCost && dist <= character.range) {
-            use_skill("piercingshot", target);
-            return;
+            if (targets.length >= 2) {
+                use_skill("3shot", targets);
+                return;
+            }
         }
     }
 }
