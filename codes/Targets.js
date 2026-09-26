@@ -141,3 +141,14 @@ function priestStation(tank, target, healMember) {
     anchors.push({ x: tank.x, y: tank.y, r: reach });
     moveToStation(stationPoint(target, reach, anchors), tank);
 }
+
+// --- HOT RELOAD ---
+// Re-run this slot every 60s so edits (mode, target list, positioning) apply without
+// restarting CODE. Safe because this slot holds only config and functions - no timers
+// or state to duplicate. The guard keeps a single reload timer no matter how often
+// this file re-executes (var keeps its value across re-runs). A slot with a syntax
+// error fails to run and leaves the previous definitions in place.
+var targetsReloadTimer;
+if (!targetsReloadTimer) {
+    targetsReloadTimer = setInterval(function () { load_code("Targets"); }, 60000);
+}
