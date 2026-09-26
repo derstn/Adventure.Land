@@ -27,13 +27,12 @@ const CONFIG = {
     scrollTarget: "scrolls",
     tankName: "DerstnTanks",
     authorizedParty: ["Derstn", "DerstnTanks", "DerstnHeals", "DerstnMage"],
-    patrolIntervalMs: 30 * 60 * 1000 // 30 minutes
+    patrolIntervalMs: 15 * 60 * 1000 // 15 minutes
 };
 
 const COMPOUND_CONFIG = {
     accessoryTypes: [
-        "strring", "dexring", "intring", // Rings
-        "strbelt", "dexbelt", "intbelt"  // Belts
+        "stramulet", "dexamulet", "intamulet",
     ],
     maxLevel: 3, // Compounding stops once +3 is achieved
     scrollTiers: {
@@ -46,14 +45,14 @@ const COMPOUND_CONFIG = {
 
 const EX_CONFIG = {
     npcName: "Xyn",
-    itemsToExchange: ["marketparcel", "anniversarygift", "gem0", "gem1", "armorbox", "weaponbox", "gift0"],
+    itemsToExchange: ["marketparcel", "anniversarygift", "gem0", "gem1", "armorbox", "weaponbox", "gift0", "candy0", "candy1"],
     minFreeSlots: 3,
     delayBetweenExchanges: 1200
 };
 
 const JUNK_ITEMS = [
     "hpbelt", "hpamulet", "cshirt", "pants1",
-    "stinger", "ringsj", "gloves", "helmet", "poker", "partyhat", "shoes", "confetti", "cake", "vitring", "wattire", "coat", "pants", "wbreeches", "wgloves", "wshoes", "wcap", "cclaw"
+    "stinger", "ringsj", "gloves", "helmet", "poker", "partyhat", "shoes", "confetti", "cake", "vitring", "wattire", "coat", "pants", "wbreeches", "wgloves", "wshoes", "wcap", "cclaw", "coat1", "helmet1",
 ];
 
 let deliveryQueue = [];

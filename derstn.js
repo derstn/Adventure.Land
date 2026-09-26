@@ -8,6 +8,7 @@ const CONFIG = {
     merchantName: "SuperSellin",
     targetTypes: ["scorpion"],
     useSupershot: true,
+	use3shot: true,
     usePiercingShot: true,
     followDistance: 120, // Start following if tank gets further than this
     stopDistance: 80     // Stop following once within this radius
@@ -142,6 +143,28 @@ function handleSkills(target) {
         const superCost = (G.skills.supershot && G.skills.supershot.mp) || 400;
         if (!is_on_cooldown("supershot") && character.mp >= superCost && dist <= (character.range * 1.5)) {
             use_skill("supershot", target);
+            return;
+        }
+    }
+	
+	// 3-Shot
+    if (CONFIG.use3shot) {
+        const cost3Shot = (G.skills["3shot"] && G.skills["3shot"].mp) || 200;
+        
+        if (!is_on_cooldown("3shot") && character.mp >= cost3Shot && dist <= character.range) {
+            // Find up to 2 additional nearby monsters to maximize the skill
+            let targets = [target];
+            for (let id in parent.entities) {
+                let entity = parent.entities[id];
+                if (entity.type === "monster" && !entity.dead && entity.id !== target.id) {
+                    if (distance(character, entity) <= character.range) {
+                        targets.push(entity);
+                        if (targets.length >= 3) break;
+                    }
+                }
+            }
+
+            use_skill("3shot", targets);
             return;
         }
     }

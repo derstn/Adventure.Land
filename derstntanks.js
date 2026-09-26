@@ -5,7 +5,7 @@ const CONFIG = {
     loopInterval: 250,
     lootInterval: 500,
     merchantName: "SuperSellin",
-    targetTypes: ["scorpion"], // Update to your active mob
+    targetTypes: ["phoenix", "snake", "osnake"], // Update to your active mob
     partyMembers: ["Derstn", "DerstnHeals", "DerstnMage", "SuperSellin"]
 };
 

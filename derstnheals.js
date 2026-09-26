@@ -123,8 +123,8 @@ setInterval(() => {
     // 1. Healing Priority (takes precedence over damage even while moving)
     let targetHeal = getLowestPartyMember();
 
-    if (targetHeal.pct < CONFIG.partyHealThreshold && !is_on_cooldown("party_heal") && character.mp >= 400) {
-        use_skill("party_heal");
+    if (targetHeal.pct < CONFIG.partyHealThreshold && !is_on_cooldown("partyheal") && character.mp >= 400) {
+        use_skill("partyheal");
         return;
     }
 
