@@ -1,6 +1,13 @@
 // --- RANGER SCRIPT (Derstn) ---
 performance_trick();
 
+// Shared account CODE slots (see adventureland/codes/): party management,
+// merchant mule offload, and potion-request logic are identical across
+// characters, so they live in one place instead of being copy-pasted.
+load_code("PartyManager");
+load_code("Utils");
+load_code("CombatSupport");
+
 const CONFIG = {
     loopInterval: 250,
     lootInterval: 500,
@@ -17,55 +24,6 @@ let lastHuntersMarkTime = 0;
 
 // Looting
 setInterval(() => { loot(); }, CONFIG.lootInterval);
-
-// --- UPDATED PROXIMITY MULE & CAPACITY ALERT ---
-const MULE_CONFIG = {
-    merchantName: "SuperSellin",
-    goldReserve: 50000,
-    transferDistance: 250,
-    keepItems: ["tracker", "hpot1", "mpot1"]
-};
-
-let lastFullBagAlert = 0;
-
-function offloadToMerchant() {
-    if (character.rip) return;
-
-    let merchant = get_player(MULE_CONFIG.merchantName);
-    
-    // If merchant is nearby, dump up to 6 items per second instead of just 1
-    if (merchant && distance(character, merchant) <= MULE_CONFIG.transferDistance) {
-        // Offload gold
-        if (character.gold > MULE_CONFIG.goldReserve + 20000) {
-            send_gold(MULE_CONFIG.merchantName, character.gold - MULE_CONFIG.goldReserve);
-        }
-
-        let sent = 0;
-        for (let i = 0; i < character.items.length; i++) {
-            let item = character.items[i];
-            if (!item || MULE_CONFIG.keepItems.includes(item.name)) continue;
-
-            send_item(MULE_CONFIG.merchantName, i, item.q || 1);
-            sent++;
-            if (sent >= 6) break; // Burst send to clear bags during the merchant's visit
-        }
-    }
-
-    // Call for pickup on-demand if bags have 6 or fewer empty slots left
-    let emptySlots = character.items.filter(i => !i).length;
-    if (emptySlots <= 6 && Date.now() - lastFullBagAlert > 60000) {
-        send_cm(MULE_CONFIG.merchantName, {
-            action: "request_pickup",
-            x: character.x,
-            y: character.y,
-            map: character.map
-        });
-        lastFullBagAlert = Date.now();
-        set_message("Bag Full! Called Mule");
-    }
-}
-
-setInterval(offloadToMerchant, 500);
 
 // Survival
 function managePotions() {
@@ -119,7 +77,7 @@ function getTarget(tank) {
         return current;
     }
 
-    return get_nearest_monster({ type: CONFIG.targetTypes[0] });
+    return get_nearest_monster({ type: CONFIG.targetTypes[0], path_check: true });
 }
 
 // Combat Skills
@@ -154,16 +112,9 @@ function handleSkills(target) {
         const cost3Shot = (G.skills["3shot"] && G.skills["3shot"].mp) || 200;
 
         if (!is_on_cooldown("3shot") && character.mp >= cost3Shot && dist <= character.range) {
-            let targets = [target];
-            for (let id in parent.entities) {
-                let entity = parent.entities[id];
-                if (entity.type === "monster" && !entity.dead && entity.id !== target.id) {
-                    if (distance(character, entity) <= character.range) {
-                        targets.push(entity);
-                        if (targets.length >= 3) break;
-                    }
-                }
-            }
+            // Built-in helper is pre-sorted nearest-first and already excludes
+            // invincible/dead/party/guild entities, unlike a manual entity scan.
+            let targets = get_nearby_hostiles({ range: character.range - 2, limit: 3 });
 
             if (targets.length >= 2) {
                 use_skill("3shot", targets);
@@ -197,38 +148,3 @@ setInterval(() => {
         attack(target);
     }
 }, CONFIG.loopInterval);
-
-// --- QUARTERMASTER REQUEST ROUTINE ---
-let lastDeliveryRequest = 0;
-
-// Potion Counter Helper
-function countItem(name) {
-    let total = 0;
-    for (let slot of character.items) {
-        if (slot && slot.name === name) total += slot.q || 1;
-    }
-    return total;
-}
-
-function checkPotionStock() {
-    if (character.rip) return;
-
-    let hpStock = countItem("hpot1");
-    let mpStock = countItem("mpot1");
-
-    // Request restock when under 2000, target 5000 (rate-limited to every 60s)
-    if ((hpStock < 2000 || mpStock < 2000) && Date.now() - lastDeliveryRequest > 60000) {
-        send_cm("SuperSellin", {
-            action: "request_potions",
-            hpNeeded: Math.max(0, 5000 - hpStock),
-            mpNeeded: Math.max(0, 5000 - mpStock),
-            x: character.x,
-            y: character.y,
-            map: character.map
-        });
-        lastDeliveryRequest = Date.now();
-        set_message("Requested Pots");
-    }
-}
-
-setInterval(checkPotionStock, 10000);

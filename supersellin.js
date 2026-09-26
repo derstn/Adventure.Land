@@ -1,6 +1,12 @@
 // --- MERCHANT SCRIPT (SuperSellin) ---
 performance_trick();
 
+// Shared account CODE slots (see adventureland/codes/): party management and
+// misc helpers are identical across characters. No CombatSupport here - the
+// merchant is the recipient of the mule/potion-request calls, not a participant.
+load_code("PartyManager");
+load_code("Utils");
+
 setInterval(() => {
     if (character.rip) return;
     if (is_on_cooldown("use_hp")) return;
@@ -92,14 +98,6 @@ async function closeStand() {
 }
 
 // Helpers
-function countItem(name) {
-    let total = 0;
-    for (let slot of character.items) {
-        if (slot && slot.name === name) total += slot.q || 1;
-    }
-    return total;
-}
-
 function getFreeSlots() {
     return character.items.filter(slot => !slot).length;
 }

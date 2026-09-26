@@ -1,6 +1,13 @@
 // --- WARRIOR SCRIPT (DerstnTanks) ---
 performance_trick();
 
+// Shared account CODE slots (see adventureland/codes/): party management,
+// merchant mule offload, and potion-request logic are identical across
+// characters, so they live in one place instead of being copy-pasted.
+load_code("PartyManager");
+load_code("Utils");
+load_code("CombatSupport");
+
 const CONFIG = {
     loopInterval: 250,
     lootInterval: 500,
@@ -11,55 +18,6 @@ const CONFIG = {
 
 setInterval(() => { loot(); }, CONFIG.lootInterval);
 
-// --- UPDATED PROXIMITY MULE & CAPACITY ALERT ---
-const MULE_CONFIG = {
-    merchantName: "SuperSellin",
-    goldReserve: 50000,
-    transferDistance: 250,
-    keepItems: ["tracker", "hpot1", "mpot1"]
-};
-
-let lastFullBagAlert = 0;
-
-function offloadToMerchant() {
-    if (character.rip) return;
-
-    let merchant = get_player(MULE_CONFIG.merchantName);
-    
-    // If merchant is nearby, dump up to 6 items per second instead of just 1
-    if (merchant && distance(character, merchant) <= MULE_CONFIG.transferDistance) {
-        // Offload gold
-        if (character.gold > MULE_CONFIG.goldReserve + 20000) {
-            send_gold(MULE_CONFIG.merchantName, character.gold - MULE_CONFIG.goldReserve);
-        }
-
-        let sent = 0;
-        for (let i = 0; i < character.items.length; i++) {
-            let item = character.items[i];
-            if (!item || MULE_CONFIG.keepItems.includes(item.name)) continue;
-
-            send_item(MULE_CONFIG.merchantName, i, item.q || 1);
-            sent++;
-            if (sent >= 6) break; // Burst send to clear bags during the merchant's visit
-        }
-    }
-
-    // Call for pickup on-demand if bags have 6 or fewer empty slots left
-    let emptySlots = character.items.filter(i => !i).length;
-    if (emptySlots <= 6 && Date.now() - lastFullBagAlert > 60000) {
-        send_cm(MULE_CONFIG.merchantName, {
-            action: "request_pickup",
-            x: character.x,
-            y: character.y,
-            map: character.map
-        });
-        lastFullBagAlert = Date.now();
-        set_message("Bag Full! Called Mule");
-    }
-}
-
-setInterval(offloadToMerchant, 500);
-
 // Survival Potions
 function managePotions() {
     if (is_on_cooldown("use_hp")) return;
@@ -67,6 +25,36 @@ function managePotions() {
     else if (character.mp < character.max_mp * 0.3) use_skill("use_mp");
     else if (character.hp < character.max_hp) use_skill("regen_hp");
 }
+
+// Hard Shell: reactive self-mitigation, only fired when HP is actually dropping fast
+// (not on cooldown regardless of danger) since the party leans on Taunt to avoid damage entirely.
+const HARDSHELL_HP_THRESHOLD = 0.5;
+
+function manageHardShell() {
+    if (is_on_cooldown("hardshell")) return;
+    const cost = (G.skills.hardshell && G.skills.hardshell.mp) || 480;
+    if (character.mp < cost) return;
+    if (character.hp < character.max_hp * HARDSHELL_HP_THRESHOLD) {
+        use_skill("hardshell");
+    }
+}
+
+// Elixir Maintenance: keep elixirstr0 equipped, re-equip from bags if it falls off
+function maintainElixir() {
+    try {
+        const requiredElixir = "elixirstr0";
+        const currentElixir = character.slots.elixir?.name;
+        if (currentElixir !== requiredElixir) {
+            let slot = locate_item(requiredElixir);
+            if (slot !== -1) {
+                use(slot);
+            } else {
+                game_log("Out of " + requiredElixir + "!");
+            }
+        }
+    } catch (e) { console.error("Error in maintainElixir:", e); }
+}
+setInterval(maintainElixir, 5000);
 
 // Aggro Control: Taunt any mob attacking squishy party members
 function checkAggro() {
@@ -125,6 +113,7 @@ setInterval(() => {
     managePotions();
     if (character.rip) return;
 
+    manageHardShell();
     checkAggro();
 
     let target = getValidTankTarget();
@@ -141,36 +130,3 @@ setInterval(() => {
         attack(target);
     }
 }, CONFIG.loopInterval);
-
-// --- QUARTERMASTER REQUEST ROUTINE ---
-let lastDeliveryRequest = 0;
-
-function countItem(name) {
-    let total = 0;
-    for (let slot of character.items) {
-        if (slot && slot.name === name) total += slot.q || 1;
-    }
-    return total;
-}
-
-function checkPotionStock() {
-    if (character.rip) return;
-
-    let hpStock = countItem("hpot1");
-    let mpStock = countItem("mpot1");
-
-    if ((hpStock < 2000 || mpStock < 2000) && Date.now() - lastDeliveryRequest > 60000) {
-        send_cm("SuperSellin", {
-            action: "request_potions",
-            hpNeeded: Math.max(0, 5000 - hpStock),
-            mpNeeded: Math.max(0, 5000 - mpStock),
-            x: character.x,
-            y: character.y,
-            map: character.map
-        });
-        lastDeliveryRequest = Date.now();
-        set_message("Requested Pots");
-    }
-}
-
-setInterval(checkPotionStock, 10000);

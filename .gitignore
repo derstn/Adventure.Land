@@ -1,0 +1,5 @@
+# Adventure Land VSCode extension sync folders - contain live-synced code
+# pulled directly from the game account. Keep these local only; the root-level
+# .js files are the public copies meant for this repo.
+adventureland/
+history/
