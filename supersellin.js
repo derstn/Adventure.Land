@@ -6,6 +6,8 @@ performance_trick();
 // merchant is the recipient of the mule/potion-request calls, not a participant.
 load_code("PartyManager");
 load_code("Utils");
+load_code("LiveConfig"); // optional private slot written by tools/telemetry_dashboard.py --serve; enables live push
+load_code("Telemetry"); // farm metrics + sales log for the dashboard; starts timers, load once
 
 setInterval(() => {
     if (character.rip) return;
@@ -38,12 +40,12 @@ const CONFIG = {
 
 const COMPOUND_CONFIG = {
     accessoryTypes: [
-        "stramulet", "dexamulet", "intamulet",
+        "strbelt", "dexbelt", "intbelt"
     ],
     maxLevel: 3, // Items at this level are never compounded further
     // Stop compounding a type once the merchant holds this many finished (+maxLevel) items of it
     // (one per combat character). Goes back to compounding if you take them out of the merchant's bags.
-    goalCount: { stramulet: 1, dexamulet: 1, intamulet: 1 },
+    goalCount: { stramulet: 2, dexamulet: 2, intamulet: 2 },
     maxAttemptsPerHour: 60, // rolling cap on compound calls (one +3 needs 13+ successful calls from +0s); frees up as calls age past an hour
     scrollTiers: {
         0: "cscroll0", // +0 -> +1
@@ -60,13 +62,67 @@ const EX_CONFIG = {
     delayBetweenExchanges: 1200
 };
 
+// Deadlock breaker: exchange() needs free bag space just to start, but sellJunk/compounding can't
+// touch gifts/parcels/gems/boxes (they aren't junk or accessories) - if the bag fills entirely with
+// exchange-bound items there is nothing else that can ever free a slot, so it retries forever. When
+// that happens, bank some overflow to guarantee room instead of getting stuck.
+const BANK_CONFIG = {
+    potionReserve: 20,      // keep at least this many hpot1/mpot1 on hand for deliveries; bank any extra
+    maxItemsToBank: 3,      // cap per bank trip so it can't run long
+    cooldownMs: 5 * 60 * 1000
+};
+
 const JUNK_ITEMS = [
     "hpbelt", "hpamulet", "cshirt", "pants1",
-    "stinger", "ringsj", "gloves", "helmet", "poker", "partyhat", "shoes", "confetti", "cake", "vitring", "wattire", "coat", "pants", "wbreeches", "wgloves", "wshoes", "wcap", "cclaw", "coat1", "helmet1",
+    "stinger", "ringsj", "gloves", "poker", "partyhat", "shoes", "confetti", "cake", "vitring", "wattire", "coat", "pants", "wbreeches", "wgloves", "wshoes", "wcap", "cclaw", "coat1", "helmet1", "stramulet", "intamulet", "dexamulet", "swifty",
+	"dexring", "intring", "strring",
 ];
 
 let deliveryQueue = [];
 let isBusy = false;
+
+// Preferred routes. smart_move always takes the SHORTEST path, and between Mainland and Spooky Town that is
+// through Underground [Entrance] (level1), where Vampire Rats stand beside both exits. Each entry forces a chain
+// of waypoints (a map's own spawn points, i.e. safe arrival spots) so that every leg's shortest path is the
+// safe one: Mainland -> Spooky Forest -> Spooky Town and back. Key = "current map>destination map".
+const ROUTE_CONFIG = {
+    "main>spookytown": [
+        { map: "halloween", x: 1212, y: 101 },   // arrival from Mainland's east door
+        { map: "halloween", x: 784, y: -1060 }   // just below the door into Spooky Town
+    ],
+    "spookytown>main": [
+        { map: "spookytown", x: 32, y: 1404 },   // arrival point at the door back to Spooky Forest
+        { map: "halloween", x: 784, y: -1060 },
+        { map: "halloween", x: 1212, y: 101 }    // beside the door to Mainland
+    ]
+};
+
+async function safeMove(dest) {
+    const to = (dest && dest.map) || character.map;
+    const chain = ROUTE_CONFIG[character.map + ">" + to] || [];
+    for (const waypoint of chain) {
+        await smart_move(waypoint);
+    }
+    return await smart_move(dest);
+}
+
+// If a trip is interrupted the merchant can end up away from town with nothing queued; bring him home.
+let lastRecoverAt = 0;
+async function recoverToTown() {
+    if (isBusy || Date.now() - lastRecoverAt < 30000) return;
+    lastRecoverAt = Date.now();
+    isBusy = true;
+    try {
+        set_message("Returning Town");
+        await closeStand();
+        await safeMove(CONFIG.townSpot);
+    } catch (err) {
+        game_log("Recover to town failed: " + ((err && (err.reason || err.message)) || JSON.stringify(err)));
+    } finally {
+        isBusy = false;
+    }
+}
+
 
 // 1. Maintain Self MLuck & Auto-loot
 setInterval(() => {
@@ -149,7 +205,6 @@ async function refreshPartyMLuck() {
 
 // 2. Auto-sell Junk Drops
 function sellJunk() {
-    if (isBusy) return;
     let soldCount = 0;
     for (let i = 0; i < character.items.length; i++) {
         let item = character.items[i];
@@ -238,6 +293,45 @@ async function executeCompoundingRoutine() {
     if (recentCompoundAttempts() >= COMPOUND_CONFIG.maxAttemptsPerHour) {
         game_log(`Compound cap (${COMPOUND_CONFIG.maxAttemptsPerHour}/hour) reached; resumes as attempts age out.`);
     }
+}
+
+// Bank overflow to guarantee exchange has room, when selling junk and compounding couldn't free any.
+let lastBankTripAt = 0;
+async function makeRoomForExchange() {
+    if (getFreeSlots() >= EX_CONFIG.minFreeSlots) return;
+    if (Date.now() - lastBankTripAt < BANK_CONFIG.cooldownMs) return;
+    lastBankTripAt = Date.now();
+
+    set_message("Banking Overflow");
+    game_log("Bags too full to exchange; banking overflow to make room...");
+    await smart_move("bank");
+
+    let banked = 0;
+
+    // 1. Excess potions beyond the delivery reserve
+    for (let name of ["hpot1", "mpot1"]) {
+        while (banked < BANK_CONFIG.maxItemsToBank && getFreeSlots() < EX_CONFIG.minFreeSlots
+               && countItem(name) > BANK_CONFIG.potionReserve) {
+            let slot = character.items.findIndex(it => it && it.name === name);
+            if (slot === -1) break;
+            await bank_store(slot);
+            banked++;
+            await new Promise(r => setTimeout(r, 300));
+        }
+    }
+
+    // 2. Fallback: bank one exchange-item stack itself so at least the rest can go through
+    while (banked < BANK_CONFIG.maxItemsToBank && getFreeSlots() < EX_CONFIG.minFreeSlots) {
+        let slot = findExchangeItemSlot();
+        if (slot === -1) break;
+        await bank_store(slot);
+        banked++;
+        await new Promise(r => setTimeout(r, 300));
+    }
+
+    if (banked > 0) game_log(`Banked ${banked} stack(s) to free bag space.`);
+    else game_log("Bank trip found nothing safe to bank (still stuck; will retry after cooldown).");
+    await safeMove(CONFIG.townSpot);
 }
 
 // 4. Exchange Routine (Executed safely in town)
@@ -336,6 +430,8 @@ async function processQueue() {
             distance(character, CONFIG.townSpot) < 50 && 
             !character.moving) {
             openStand();
+        } else if (!character.moving) {
+            recoverToTown();
         }
         return;
     }
@@ -363,7 +459,7 @@ async function processQueue() {
 
             set_message(`To ${task.recipient}`);
             if (task.x !== undefined && task.y !== undefined) {
-                await smart_move({ x: task.x, y: task.y, map: task.map });
+                await safeMove({ x: task.x, y: task.y, map: task.map });
             } else {
                 await smart_move({ to: task.recipient });
             }
@@ -410,7 +506,7 @@ async function processQueue() {
             }
 
             if (targetLoc) {
-                await smart_move(targetLoc);
+                await safeMove(targetLoc);
 
                 // Top off MLuck on all party members with < 30 minutes left
                 await refreshPartyMLuck();
@@ -423,7 +519,7 @@ async function processQueue() {
 
         // --- Town Sequence: Vendor -> Compound Accessories -> Exchanges ---
         set_message("Returning Town");
-        await smart_move(CONFIG.townSpot);
+        await safeMove(CONFIG.townSpot);
         sellJunk();
 
         // 1. Process Accessories (+0 through +2)
@@ -433,8 +529,11 @@ async function processQueue() {
 
         // 2. Process Parcel & Gift Exchanges
         if (findExchangeItemSlot() !== -1) {
+            if (getFreeSlots() < EX_CONFIG.minFreeSlots) {
+                await makeRoomForExchange();
+            }
             await executeExchangeRoutine();
-            await smart_move(CONFIG.townSpot);
+            await safeMove(CONFIG.townSpot);
             sellJunk();
         }
 

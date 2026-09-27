@@ -6,7 +6,10 @@ var FARM_CONFIG = {
     // "support_tank": ranger + priest only hit whatever the warrior is targeting.
     // "free_for_all": everyone picks the nearest valid farm mob on their own.
     mode: "support_tank",
-    targetTypes: ["phoenix", "snake", "osnake"]
+    targetTypes: ["phoenix", "snake", "osnake"],
+    // Agitate (AoE taunt) can grab anything nearby, including a powerful spawn nobody wanted pulled -
+    // opt-in only, and only in free_for_all (this slot hot-reloads, so flip it live with no restart).
+    agitateEnabled: false
 };
 
 // A monster we're willing to fight: right type, alive, and not locked onto a
@@ -140,6 +143,44 @@ function priestStation(tank, target, healMember) {
     let anchors = partyStationAnchors(reach);
     anchors.push({ x: tank.x, y: tank.y, r: reach });
     moveToStation(stationPoint(target, reach, anchors), tank);
+}
+
+// --- MP MANAGEMENT ---
+// Skills cost flat MP (3-Shot 200, Supershot 400, Hunter's Mark 240) but an MP potion only restores 500 per 2 s,
+// so casting every attack tick drains MP to zero and the character stalls. Damage skills only fire while this
+// fraction of max MP would still remain after the cast; below that the character just uses its normal attack
+// and potions catch up. Tune these live (this slot hot-reloads).
+var MP_CONFIG = {
+    dpsSkillReserve: 0.40,      // ranger damage skills: keep 40% of max MP in reserve
+    supportSkillReserve: 0.10,  // heals / defensive skills may spend almost everything
+    supportAttackReserve: 0.30, // priest basic attacks stop below this so mana is kept for heals
+    potionBelow: 0.60,          // drink an MP potion whenever MP is under this fraction of max
+    warriorSkillReserve: 0.15   // warrior's mp pool is small; keep enough free that Hard Shell never starves
+};
+
+function canSpendMp(cost, reserve) {
+    return character.mp - cost >= character.max_mp * reserve;
+}
+
+// True once a skill's level requirement is met (skills with no `level` field are available from
+// the start). Lets rotations reference higher-level skills (e.g. Piercing Shot, Dark Blessing, 5-Shot)
+// unconditionally - they simply switch on the moment the character actually dings that level, with
+// no code change or exact-level bookkeeping needed here.
+function skillUnlocked(name) {
+    let s = G.skills[name];
+    return !s || !s.level || character.level >= s.level;
+}
+
+// Party members (other than self) below `threshold` of their max HP. Shared by the warrior's Taunt
+// peel and the priest's Absorb Sins peel.
+function endangeredMembers(threshold) {
+    let names = [];
+    for (let name of partyNames()) {
+        if (name === character.name) continue;
+        let member = get_player(name);
+        if (member && !member.rip && member.hp / member.max_hp < threshold) names.push(name);
+    }
+    return names;
 }
 
 // --- HOT RELOAD ---

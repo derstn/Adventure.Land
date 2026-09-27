@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Farm Dashboard</title>
+<style>
+  :root { --bg:#12141a; --panel:#1b1e27; --line:#2b3040; --text:#e6e8ee; --dim:#8b93a7; --accent:#4dabf7; --good:#69db7c; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, "Segoe UI", sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:14px 20px; border-bottom:1px solid var(--line); }
+  h1 { font-size:18px; margin:0 12px 0 0; }
+  .sub { color:var(--dim); font-size:12px; }
+  .spacer { flex:1; }
+  .pill { font-size:11px; font-weight:700; letter-spacing:.06em; padding:2px 8px; border-radius:10px; background:#3b1d1d; color:#ff8787; }
+  .pill.on { background:#153a24; color:var(--good); }
+  .btn { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 11px; cursor:pointer; font:inherit; }
+  .btn.on { background:var(--accent); border-color:var(--accent); color:#04121f; font-weight:600; }
+  main { padding:16px 20px 40px; max-width:1500px; margin:0 auto; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:10px; margin-bottom:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .card .k { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  .card .v { font-size:22px; font-weight:650; margin-top:2px; }
+  .card .s { color:var(--dim); font-size:11px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px; }
+  h2 { font-size:13px; margin:0 0 8px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(460px,1fr)); gap:14px; }
+  canvas { width:100%; height:230px; display:block; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:right; padding:5px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--dim); font-weight:600; font-size:11px; text-transform:uppercase; }
+  .scroll { overflow-x:auto; }
+  .legend { display:flex; flex-wrap:wrap; gap:12px; font-size:12px; color:var(--dim); margin-bottom:4px; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; }
+  .bar { display:inline-block; width:64px; height:7px; background:#2b3040; border-radius:4px; vertical-align:middle; overflow:hidden; }
+  .bar > i { display:block; height:100%; }
+  #tip { position:fixed; pointer-events:none; background:#0c0e13; border:1px solid var(--line); border-radius:6px; padding:6px 9px; font-size:12px; display:none; z-index:10; }
+  #toasts { position:fixed; right:16px; bottom:16px; display:flex; flex-direction:column; gap:8px; z-index:20; }
+  .toast { background:#153a24; border:1px solid #2f7a4c; color:#d3f9d8; padding:8px 12px; border-radius:8px; font-size:13px; box-shadow:0 4px 14px #0008; }
+  .empty { color:var(--dim); padding:30px; text-align:center; }
+  .note { color:var(--dim); font-size:12px; margin-top:6px; }
+  /* ---- ElvUI-style flat theme: dark panels, 1px black borders, solid status bars, condensed font ---- */
+  body { font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Segoe UI Semibold", "Arial Narrow", "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; }
+  :root { --bg:#0b0b0c; --panel:#161616; --line:#262626; --dim:#9a9a9a; }
+  section, .card, .ccard { border:1px solid #000; box-shadow: inset 0 0 0 1px #2e2e2e; border-radius:0; }
+  h2 { color:#d6b45a; letter-spacing:.06em; }
+  .btn { border:1px solid #000; border-radius:0; box-shadow: inset 0 0 0 1px #2e2e2e; }
+  .btn.on { box-shadow: none; }
+  .bar { height:10px; background:#1c1c1c; border:1px solid #000; border-radius:0; box-shadow:none; }
+  .chars { display:grid; grid-template-columns:repeat(auto-fill,minmax(335px,1fr)); gap:12px; }
+  .totalgold { margin-top:10px; padding:8px 12px; background:#171717; border:1px solid #000; box-shadow: inset 0 0 0 1px #2e2e2e; color:#d0d0d0; font-size:13px; }
+  .totalgold b { color:#ffd43b; font-size:16px; }
+  .ccard { background:#171717; padding:8px; border-top:1px solid #000; }
+  .eframe { display:flex; gap:3px; }
+  .eport { width:62px; flex:none; display:flex; align-items:center; justify-content:center; background:#101010; border:1px solid #000; box-shadow: inset 0 0 0 1px #2e2e2e;
+           font:700 28px "Bahnschrift", "Segoe UI", sans-serif; color:var(--cc); }
+  .ebars { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+  .ebar { position:relative; background:#0c0c0c; border:1px solid #000; box-shadow: inset 0 0 0 1px #262626; overflow:hidden; }
+  .efill { position:absolute; left:0; top:0; bottom:0; transition:width .35s ease-out;
+           background-image:linear-gradient(rgba(255,255,255,.16), rgba(255,255,255,0) 45%, rgba(0,0,0,.28)); background-blend-mode:normal; }
+  .etl, .etr { position:absolute; top:0; bottom:0; display:flex; align-items:center; padding:0 6px; color:#fff; white-space:nowrap;
+               text-shadow:1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000; }
+  .etl { left:0; } .etr { right:0; }
+  .ebar.hp { height:28px; font-size:15px; } .ebar.mp { height:17px; font-size:12px; } .ebar.thin { height:14px; font-size:11px; }
+  .ehead { display:flex; align-items:center; gap:8px; margin-bottom:5px; font-size:12px; color:var(--dim); }
+  .ehead .dot { margin:0; }
+  .ehead .tag { color:var(--cc); border:1px solid #000; box-shadow: inset 0 0 0 1px #2e2e2e; background:#101010; padding:0 6px; font-size:11px; }
+  .ehead .sp { margin-left:auto; }
+  .cstats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px 8px; margin-top:8px; padding:6px 6px 4px; background:#111; border:1px solid #000; box-shadow: inset 0 0 0 1px #262626; }
+  .cs .k { font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
+  .cs .v { font-size:16px; font-weight:600; margin-top:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#f0f0f0; }
+  .auras { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
+  .aura { width:34px; text-align:center; }
+  .aura .ai { display:flex; align-items:center; justify-content:center; height:30px; background:#101010; border:1px solid #000; box-shadow: inset 0 0 0 1px var(--ac); font-weight:700; font-size:13px; color:var(--ac); }
+  .aura .at { font-size:10px; color:#d0d0d0; margin-top:1px; text-shadow:1px 1px 0 #000; }
+  .lucky-summary { margin-bottom:10px; padding:8px 12px; background:#171717; border:1px solid #000; box-shadow: inset 0 0 0 1px #2e2e2e; color:#d0d0d0; font-size:13px; }
+  .lucky-summary b { color:#d6b45a; font-size:16px; }
+  .lucky-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; }
+  .lucky-slot { position:relative; background:#101010; border:1px solid #000; box-shadow: inset 0 0 0 1px #262626; padding:5px 4px; text-align:center; }
+  .lucky-slot.candidate { border-color:#d6b45a; box-shadow: inset 0 0 0 1px rgba(214,180,90,.35), 0 0 6px rgba(214,180,90,.4); }
+  .lucky-slot.roll-candidate { border-color:#4dabf7; box-shadow: inset 0 0 0 1px rgba(77,171,247,.35), 0 0 6px rgba(77,171,247,.4); }
+  .lucky-slot.candidate.roll-candidate { border-image: linear-gradient(135deg,#d6b45a,#4dabf7) 1; box-shadow: inset 0 0 0 1px rgba(214,180,90,.3), 0 0 8px rgba(77,171,247,.5); }
+  .lucky-slot .ls-num { color:#7a7a7a; font-size:10px; }
+  .lucky-slot .ls-rel { font-size:15px; font-weight:700; margin:2px 0; }
+  .lucky-slot .ls-n { color:#8a8a8a; font-size:10px; }
+  .lucky-slot .ls-roll { color:#5a8fc7; font-size:9px; margin-top:1px; }
+  .gcards { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:12px; }
+  .gcard { background:#171717; padding:8px; border-top:1px solid #000; }
+  .gcard .ehead { margin-bottom:6px; }
+  .gbody { display:flex; gap:10px; flex-wrap:wrap; }
+  .gear { flex:1; min-width:170px; border-collapse:collapse; }
+  .gear td { padding:2px 4px; font-size:12px; border:none; white-space:nowrap; }
+  .gslot { color:var(--dim); text-align:left; }
+  .gitem { text-align:left; color:#e6e8ee; }
+  .gstats { flex:1; min-width:170px; grid-template-columns:repeat(2,1fr); margin-top:0; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Farm Dashboard</h1>
+  <span class="pill" id="pill" style="display:none">LIVE</span>
+  <span class="sub" id="meta"></span>
+  <span class="spacer"></span>
+  <span id="ranges"></span>
+  <label class="sub" id="autoLabel"><input type="checkbox" id="auto"> auto-refresh (60s)</label>
+</header>
+<main id="main"></main>
+<div id="tip"></div>
+<div id="toasts"></div>
+<script>
+let DATA = __DATA__;
+const FEED = __FEED__;
+const $ = (s) => document.querySelector(s);
+const HP_POTION_HEAL = 400; // hpot1; potion counts do not say which size was used
+const COLORS = ["#4dabf7", "#ffa94d", "#69db7c", "#f783ac", "#b197fc", "#ffd43b", "#63e6be"];
+const CLASS_COLORS = { warrior: "#C79C6E", ranger: "#ABD473", priest: "#FFFFFF", mage: "#69CCF0", rogue: "#FFF569", paladin: "#F58CBA", merchant: "#A0693D" };
+const CLASS_ORDER = ["warrior", "priest", "mage", "ranger", "rogue", "paladin", "merchant"];
+const RANGES = { "1h": 3600e3, "6h": 6 * 3600e3, "24h": 24 * 3600e3, "7d": 7 * 24 * 3600e3, "all": Infinity };
+let range = FEED ? "6h" : "24h";
+try { range = localStorage.getItem(FEED ? "al_range_live" : "al_range") || range; } catch (e) {}
+if (!(range in RANGES)) range = FEED ? "6h" : "24h";
+
+let KNOWN = [], combat = [], colorOf = {}, lastFetchOk = 0, lastTradeT = null;
+const isMerchant = (name) => (KNOWN.find((c) => c.name === name) || {}).class === "merchant";
+function prep() {
+  KNOWN = DATA.chars;
+  combat = KNOWN.filter((c) => c.class !== "merchant").map((c) => c.name);
+  colorOf = {}; KNOWN.forEach((c, i) => { colorOf[c.name] = CLASS_COLORS[c.class] || COLORS[i % COLORS.length]; });
+}
+
+function esc(s) { const d = document.createElement("div"); d.textContent = String(s == null ? "" : s); return d.innerHTML; }
+function num(n, digits) {
+  if (n == null || !isFinite(n)) return "—";
+  const a = Math.abs(n), d = digits == null ? 1 : digits;
+  if (a >= 1e9) return (n / 1e9).toFixed(2) + "B";
+  if (a >= 1e6) return (n / 1e6).toFixed(2) + "M";
+  if (a >= 1e4) return (n / 1e3).toFixed(1) + "k";
+  return a >= 100 || Number.isInteger(n) ? Math.round(n).toLocaleString() : n.toFixed(d);
+}
+function fmtTime(t) { return new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
+function hoursFmt(h) { return h < 1 ? Math.round(h * 60) + " min" : h.toFixed(1) + " h"; }
+function ago(ms) {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  return s < 90 ? s + " s ago" : s < 5400 ? Math.round(s / 60) + " min ago" : hoursFmt(s / 3600) + " ago";
+}
+
+function endTime() {
+  const b = DATA.buckets.length ? DATA.buckets[DATA.buckets.length - 1].t + DATA.bucketMs : 0;
+  const n = Math.max(0, ...(DATA.now || []).map((r) => r.t || 0));
+  return Math.max(b, n) || DATA.generated;
+}
+function inRange() {
+  const cut = RANGES[range] === Infinity ? -Infinity : endTime() - RANGES[range];
+  return DATA.buckets.filter((b) => b.t >= cut);
+}
+
+function aggregate(bs) {
+  const A = { chars: {}, gold: 0, farmGold: 0, merchGold: 0, salesV: 0, salesN: 0, hours: bs.length * DATA.bucketMs / 3.6e6, farmHours: 0, segs: {}, drops: {}, tkm: {}, km: {} };
+  for (const b of bs) {
+    A.gold += b.gold_net; A.salesV += b.sales_v; A.salesN += b.sales_n;
+    let anyCombat = false;
+    for (const [name, c] of Object.entries(b.c)) {
+      const t = A.chars[name] || (A.chars[name] = { xp: 0, dmg: 0, hl: 0, kb: 0, dt: 0, hp: 0, mp: 0, up: 0, fs: 0, pd: 0, pn: 0, tk: 0, hr: 0, tkm: {}, ccm: 0 });
+      t.ccm = Math.max(t.ccm, c.ccm || 0);
+      for (const k of ["xp", "dmg", "hl", "kb", "dt", "hp", "mp", "up", "fs", "pd", "pn", "tk", "hr"]) t[k] += c[k] || 0;
+      for (const [mt, v] of Object.entries(c.tkm || {})) { t.tkm[mt] = (t.tkm[mt] || 0) + v; A.tkm[mt] = (A.tkm[mt] || 0) + v; }
+      for (const [mt, v] of Object.entries(c.km || {})) A.km[mt] = (A.km[mt] || 0) + v;
+      const ge = c.ge != null ? c.ge : c.g || 0;
+      if (isMerchant(name)) A.merchGold += ge; else A.farmGold += ge;
+      for (const [item, n] of Object.entries(c.dr || {})) A.drops[item] = (A.drops[item] || 0) + n;
+      if (!isMerchant(name) && c.up > 0) anyCombat = true;
+    }
+    if (anyCombat) A.farmHours += DATA.bucketMs / 3.6e6;
+    if (b.seg) {
+      const s = A.segs[b.seg] || (A.segs[b.seg] = { hours: 0, xp: 0, gold: 0, kb: 0, dt: 0, drops: {} });
+      s.hours += DATA.bucketMs / 3.6e6; s.gold += b.gold_net;
+      for (const [name, c] of Object.entries(b.c)) {
+        if (isMerchant(name)) continue;
+        s.xp += c.xp || 0; s.kb += c.kb || 0; s.dt += c.dt || 0;
+        for (const [item, n] of Object.entries(c.dr || {})) s.drops[item] = (s.drops[item] || 0) + n;
+      }
+    }
+  }
+  return A;
+}
+
+function card(k, v, s) { return '<div class="card"><div class="k">' + esc(k) + '</div><div class="v">' + v + '</div><div class="s">' + esc(s || "") + '</div></div>'; }
+const rate = (n, h) => (h > 0 ? n / h : null);
+
+function renderCards(A) {
+  const partyXp = combat.reduce((s, n) => s + ((A.chars[n] || {}).xp || 0), 0);
+  const kb = combat.reduce((s, n) => s + ((A.chars[n] || {}).kb || 0), 0);
+  const dt = combat.reduce((s, n) => s + ((A.chars[n] || {}).dt || 0), 0);
+  const dps = combat.reduce((s, n) => { const c = A.chars[n]; return s + (c && c.up > 0 ? c.dmg / c.up : 0); }, 0);
+  const takenPerSec = combat.reduce((s, n) => { const c = A.chars[n]; return s + (c && c.up > 0 ? c.tk / c.up : 0); }, 0);
+  const pots = Object.values(A.chars).reduce((s, c) => s + c.hp + c.mp, 0);
+  const dropN = Object.values(A.drops).reduce((s, n) => s + n, 0);
+  return '<div class="cards">' +
+    card("Party XP / hr", num(rate(partyXp, A.farmHours)), num(partyXp) + " over " + hoursFmt(A.farmHours) + " farming") +
+    card("Farm gold / hr", num(rate(A.farmGold, A.hours)), "fighters only, transfers to the merchant excluded") +
+    card("Merchant net / hr", num(rate(A.merchGold, A.hours)), "sales minus spending, transfers from fighters excluded") +
+    card("Account gold / hr", num(rate(A.gold, A.hours)), "total real income minus spending, no double counting") +
+    card("Sales / hr", num(rate(A.salesV, A.hours)), A.salesN + " items, listed value (before tax)") +
+    card("Party DPS", num(dps), "sum of per-character averages") +
+    card("Damage taken / s", num(takenPerSec), "all fighters, uptime average") +
+    card("Killing blows / hr", num(rate(kb, A.farmHours)), num(kb) + " total") +
+    card("Deaths", num(dt), dt ? "1 per " + hoursFmt(A.farmHours / dt) : "none in range") +
+    card("Potions used / hr", num(rate(pots, A.hours)), "HP + MP, all characters") +
+    card("Notable drops", num(dropN), Object.keys(A.drops).length + " kinds") + '</div>';
+}
+
+function fmtDur(sec) {
+  if (sec == null || !isFinite(sec) || sec < 0) return "—";
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+  if (d) return d + "d " + h + "h";
+  if (h) return h + "h " + m + "m";
+  if (m) return m + "m";
+  return Math.floor(sec) + "s";
+}
+// XP and gold per hour for one character over the last hour of loaded data (whole range if that hour is nearly empty).
+function recentRates(name) {
+  const sum = (from) => {
+    let xp = 0, ge = 0, up = 0;
+    for (const b of DATA.buckets) {
+      if (b.t < from) continue;
+      const c = b.c[name]; if (!c) continue;
+      xp += c.xp || 0; ge += c.ge != null ? c.ge : c.g || 0; up += c.up || 0;
+    }
+    return { xp, ge, up };
+  };
+  let r = sum(Date.now() - 3600e3);
+  if (r.up < 300) r = sum(-Infinity);
+  return r.up > 0 ? { xpHr: r.xp / (r.up / 3600), goldHr: r.ge / (r.up / 3600) } : { xpHr: null, goldHr: null };
+}
+function pctText(v) { return v == null || !isFinite(v) ? "—" : Math.round(v * 100) + "%"; }
+function statCell(label, color, value) { return '<div class="cs"><div class="k" style="color:' + color + '">' + label + '</div><div class="v">' + value + '</div></div>'; }
+
+function ebar(kind, pct, color, left, right) {
+  const w = pct == null || !isFinite(pct) ? 0 : Math.max(0, Math.min(100, pct));
+  return '<div class="ebar ' + kind + '"><div class="efill" style="width:' + w + '%;background-color:' + color + '"></div>' +
+    '<span class="etl">' + left + '</span><span class="etr">' + right + '</span></div>';
+}
+function auraColor(name) {
+  if (/luck|bless|grace|regen|shield|armor|haste|bulwark|zeal|aura/i.test(name)) return "#69db7c";
+  if (/encourage|patron|xp|gold|event|halloween|christmas|easter/i.test(name)) return "#e3b341";
+  return "#4f8fdc";
+}
+function auraLetters(name) {
+  const parts = name.split(/[_\s]+/).filter(Boolean);
+  return (parts.length > 1 ? parts[0][0] + parts[1][0] : name.slice(0, 2)).toUpperCase();
+}
+function ccColor(p) { return p >= 75 ? "#e5534b" : p >= 50 ? "#e3b341" : "#57ab5a"; }
+
+function renderNow() {
+  const rows = (DATA.now || []).slice().sort((a, b) => (CLASS_ORDER.indexOf(a.c) - CLASS_ORDER.indexOf(b.c)) || a.n.localeCompare(b.n));
+  if (!rows.length) return "";
+  const cards = rows.map((r) => {
+    const col = CLASS_COLORS[r.c] || colorOf[r.n] || "#8b93a7";
+    const rates = recentRates(r.n), merch = r.c === "merchant";
+    const hpP = r.mhp ? 100 * r.hp / r.mhp : null, mpP = r.mmp ? 100 * r.mp / r.mmp : null;
+    const xpP = r.mx ? 100 * r.xp / r.mx : null, ccP = r.cc != null ? 100 * r.cc / 200 : null;
+    const fresh = Date.now() - r.t < 30000;
+    const ttlu = !merch && rates.xpHr > 0 && r.mx ? (r.mx - r.xp) / rates.xpHr * 3600 : null;
+    const elapsed = (Date.now() - r.t) / 1000;
+    const auras = Object.entries(r.bf || {}).map(([k, sec]) => [k, Math.max(0, sec - elapsed)]).filter((b) => b[1] > 0)
+      .sort((a, b) => b[1] - a[1]).slice(0, 8)
+      .map(([k, sec]) => '<div class="aura" style="--ac:' + auraColor(k) + '" title="' + esc(k.replace(/_/g, " ")) + '"><div class="ai">' + esc(auraLetters(k)) + '</div><div class="at">' + fmtDur(sec) + '</div></div>').join("");
+    const letter = merch ? "$" : esc((r.c || "?").charAt(0).toUpperCase());
+    const pct = (v) => (v == null || !isFinite(v) ? "—" : Math.round(v) + "%");
+    return '<div class="ccard" style="--cc:' + col + '">' +
+      '<div class="ehead"><span class="dot" style="background:' + (fresh ? "#69db7c" : "#5c6377") + '"></span><span class="tag">' + esc(r.sv || "server") + '</span>' +
+      '<span>' + (r.su ? "up " + fmtDur((Date.now() - r.su) / 1000) : "") + '</span><span class="sp">' + esc(r.m) + (r.x != null ? " (" + r.x + ", " + r.y + ")" : "") + '</span></div>' +
+      '<div class="eframe"><div class="eport">' + letter + '</div><div class="ebars">' +
+      ebar("hp", hpP, col, esc(r.lv) + " " + esc(r.n), num(r.hp) + " | " + pct(hpP)) +
+      ebar("mp", mpP, "#4f7fd1", "MP", num(r.mp) + " | " + pct(mpP)) +
+      (merch ? "" : ebar("thin", xpP, "#8b5cf6", "XP", num(r.xp) + " / " + num(r.mx) + " | " + pct(xpP))) +
+      ebar("thin", ccP, ccColor(ccP || 0), "CC", r.cc != null ? Math.round(r.cc) + " / 200" : "—") + '</div></div>' +
+      '<div class="cstats">' +
+      statCell("Gold", "#ffd43b", num(r.g)) + statCell("Ping", "#3bc9db", r.ping != null ? Math.round(r.ping) + "ms" : "—") + statCell("Target", "#ff6b6b", esc(r.tg || "—")) +
+      statCell("Gold/h", "#ffa94d", num(rates.goldHr)) + statCell("XP/h", "#4dabf7", merch ? "—" : num(rates.xpHr)) + statCell("TTLU", "#b197fc", fmtDur(ttlu)) +
+      statCell("Gold %", "#ffa94d", pctText(r.goldm)) + statCell("XP %", "#4dabf7", pctText(r.xpm)) + statCell("Luck %", "#69db7c", pctText(r.luckm)) + '</div>' +
+      (auras ? '<div class="auras">' + auras + '</div>' : "") + '</div>';
+  }).join("");
+  const totalGold = rows.reduce((a, r) => a + (r.g || 0), 0);
+  return '<section><h2>Characters (live)</h2><div class="chars">' + cards + '</div>' +
+    '<div class="totalgold">Total account gold (reporting characters): <b>' + num(totalGold) + '</b></div></section>';
+}
+
+const EQUIP_SLOT_ORDER = ["mainhand", "offhand", "helmet", "chest", "pants", "shoes", "gloves", "cape",
+  "belt", "ring1", "ring2", "earring1", "earring2", "amulet", "orb"];
+const EQUIP_SLOT_LABELS = { mainhand: "Weapon", offhand: "Off-hand", helmet: "Helmet", chest: "Chest",
+  pants: "Pants", shoes: "Shoes", gloves: "Gloves", cape: "Cape", belt: "Belt", ring1: "Ring 1",
+  ring2: "Ring 2", earring1: "Earring 1", earring2: "Earring 2", amulet: "Amulet", orb: "Orb" };
+const STAT_ROWS = [["str", "STR"], ["int", "INT"], ["dex", "DEX"], ["vit", "VIT"], ["attack", "Attack"],
+  ["frequency", "Freq"], ["speed", "Speed"], ["range", "Range"], ["armor", "Armor"], ["resistance", "Resist"],
+  ["apiercing", "A-Pierce"], ["rpiercing", "R-Pierce"], ["evasion", "Evasion"], ["reflection", "Reflect"],
+  ["crit", "Crit %"], ["lifesteal", "Lifesteal"], ["manasteal", "Manasteal"], ["dreturn", "D-Return"],
+  ["mp_cost", "MP Cost"]];
+
+// A single pane of glass for gear/stat comparisons: what each character has equipped right now, and
+// its full stat sheet, so upgrade targets (a missing slot, a low stat relative to a teammate) jump out.
+function renderGearSheet() {
+  const rows = (DATA.now || []).slice().sort((a, b) => (CLASS_ORDER.indexOf(a.c) - CLASS_ORDER.indexOf(b.c)) || a.n.localeCompare(b.n));
+  if (!rows.length) return "";
+  const cards = rows.map((r) => {
+    const col = CLASS_COLORS[r.c] || colorOf[r.n] || "#8b93a7";
+    const eq = r.eq || {}, st = r.st || {};
+    const gearRows = EQUIP_SLOT_ORDER.map((slot) => {
+      const it = eq[slot];
+      const label = it ? esc(it.n) + (it.l ? " +" + it.l : "") + (it.s ? " (" + esc(it.s) + ")" : "") : "—";
+      return '<tr><td class="gslot">' + EQUIP_SLOT_LABELS[slot] + '</td><td class="gitem"' +
+        (it ? "" : ' style="color:var(--dim)"') + '>' + label + '</td></tr>';
+    }).join("");
+    const statCells = STAT_ROWS.filter(([k]) => st[k] != null).map(([k, label]) =>
+      statCell(label, "#8b93a7", num(st[k], 1))).join("");
+    return '<div class="gcard" style="--cc:' + col + '">' +
+      '<div class="ehead"><span class="dot" style="background:' + col + '"></span><span class="cname" style="color:' + col + '">' + esc(r.n) + '</span><span class="clv">Lv ' + esc(r.lv) + ' ' + esc(r.c || "") + '</span></div>' +
+      '<div class="gbody"><table class="gear">' + gearRows + '</table>' +
+      '<div class="cstats gstats">' + (statCells || '<div class="empty">No stats reported yet</div>') + '</div></div></div>';
+  }).join("");
+  return '<section><h2>Gear &amp; stats</h2><div class="gcards">' + cards + '</div>' +
+    '<div class="note">Equipment and stat sheet as last reported live; a dash means that slot is empty. Compare across characters to spot a missing accessory or a stat lagging a teammate\'s.</div></section>';
+}
+
+function topSource(m) {
+  const e = Object.entries(m || {}).sort((a, b) => b[1] - a[1])[0];
+  return e ? esc(e[0]) + " (" + num(e[1]) + ")" : "\u2014";
+}
+function renderSurvivability(A) {
+  const rows = combat.filter((n) => A.chars[n]).map((n) => {
+    const c = A.chars[n], hrs = c.up / 3600;
+    const per = c.up > 0 ? c.tk / c.up : null, heal = c.up > 0 ? c.hr / c.up : null;
+    const pot = c.up > 0 ? (c.hp * HP_POTION_HEAL) / c.up : null;   // HP potions used x potion size
+    const net = per != null ? per - (heal || 0) - (pot || 0) : null;
+    return '<tr><td><span class="dot" style="background:' + colorOf[n] + '"></span>' + esc(n) + '</td><td>' + num(per) + '</td><td>' + num(heal) + '</td><td>' + num(pot) + '</td><td>' +
+      num(net) + '</td><td>' + c.dt + '</td><td>' + (c.dt && hrs ? num(c.dt / hrs, 2) : "0") + '</td><td style="text-align:left">' + topSource(c.tkm) + '</td></tr>';
+  }).join("");
+  const total = Object.values(A.tkm).reduce((a, v) => a + v, 0);
+  const mobs = Array.from(new Set(Object.keys(A.tkm).concat(Object.keys(A.km)))).map((mt) => ({ mt, dmg: A.tkm[mt] || 0, kills: A.km[mt] || 0 }))
+    .sort((a, b) => b.dmg - a.dmg).map((m) =>
+      '<tr><td>' + esc(m.mt) + '</td><td>' + num(m.dmg) + '</td><td>' + (total ? Math.round(100 * m.dmg / total) + "%" : "\u2014") + '</td><td>' + m.kills + '</td><td>' + (m.kills ? num(m.dmg / m.kills) : "\u2014") + '</td></tr>').join("");
+  if (!rows && !mobs) return "";
+  return '<section><h2>Survivability</h2><div class="grid2"><div class="scroll"><table><tr><th>Character</th><th>Damage taken / s</th><th>Healed by others / s</th><th>Potion healing / s</th><th>Net drain / s</th><th>Deaths</th><th>Deaths / hr</th><th style="text-align:left">Biggest source</th></tr>' + rows + '</table>' +
+    '<div class="note">Net drain = damage taken minus priest/other healing minus potion healing. Above zero means HP is falling on average. Potion healing is HP potions used x ' + HP_POTION_HEAL + ' HP (assumes hpot1). The warrior soaking most damage is the design; watch the ranger and priest.</div></div>' +
+    '<div class="scroll"><table><tr><th>What hurts you</th><th>Damage taken</th><th>Share</th><th>Killing blows</th><th>Damage taken per kill</th></tr>' + (mobs || '<tr><td colspan="5">no data</td></tr>') + '</table>' +
+    '<div class="note">Damage taken is attributed to the monster type while it is on screen. Kills are killing blows only.</div></div></div></section>';
+}
+
+function renderRulesWatch(A) {
+  const LIMIT = 200; // the game disconnects a character whose call cost passes this (server limit: 200 calls per ~4 s)
+  const rows = KNOWN.filter((k) => A.chars[k.name]).map((k) => {
+    const peak = A.chars[k.name].ccm || 0, pct = Math.min(100, Math.round(100 * peak / LIMIT));
+    const col = pct >= 75 ? "#ff6b6b" : pct >= 50 ? "#ffd43b" : "#69db7c";
+    return '<tr><td><span class="dot" style="background:' + colorOf[k.name] + '"></span>' + esc(k.name) + '</td><td>' + (peak ? num(peak) : "\u2014") + ' / ' + LIMIT +
+      '</td><td><span class="bar"><i style="width:' + pct + '%;background:' + col + '"></i></span> ' + pct + '%</td><td>' + (peak ? num(LIMIT - peak) : "\u2014") + '</td></tr>';
+  }).join("");
+  if (!rows || !KNOWN.some((k) => (A.chars[k.name] || {}).ccm)) return "";
+  return '<section><h2>Rules watch: server call cost</h2><div class="scroll"><table><tr><th>Character</th><th>Peak call cost / limit</th><th>Of limit</th><th>Headroom</th></tr>' + rows + '</table></div>' +
+    '<div class="note">Each character is disconnected if its call cost passes 200. Red means the CODE is sending too many server requests: slow the loop that is spamming.</div></section>';
+}
+
+function eventText(e) {
+  if (e.e === "death") return "died" + (e.by ? " to " + esc(e.by) : "") + (e.m ? " on " + esc(e.m) + (e.x != null ? " (" + e.x + ", " + e.y + ")" : "") : "");
+  if (e.e === "loot") return "chest: " + (e.g ? num(e.g) + " gold" : "") + (e.g && e.items && e.items.length ? ", " : "") + esc((e.items || []).join(", "));
+  if (e.e === "lvl") return "reached level " + esc(e.lv);
+  return esc(e.e);
+}
+function renderFeed() {
+  const evs = (DATA.events || []).slice(-25).reverse();
+  if (!evs.length) return "";
+  const rows = evs.map((e) => '<tr><td style="text-align:left">' + new Date(e.t).toLocaleTimeString() + '</td><td style="text-align:left"><span class="dot" style="background:' + (colorOf[e.n] || "#8b93a7") + '"></span>' + esc(e.n) +
+    '</td><td style="text-align:left;' + (e.e === "death" ? "color:#ff8787" : "") + '">' + eventText(e) + '</td></tr>').join("");
+  return '<section><h2>Event log (deaths, chests, level-ups)</h2><div class="scroll"><table><tr><th style="text-align:left">Time</th><th style="text-align:left">Character</th><th style="text-align:left">Event</th></tr>' + rows + '</table></div></section>';
+}
+
+function renderCharTable(A) {
+  const rows = DATA.chars.map((ch) => {
+    const c = A.chars[ch.name] || { xp: 0, dmg: 0, hl: 0, kb: 0, dt: 0, hp: 0, mp: 0, up: 0, fs: 0, pd: 0, pn: 0 };
+    const uh = c.up / 3600, merch = ch.class === "merchant";
+    const partyXp = combat.reduce((s, n) => s + ((A.chars[n] || {}).xp || 0), 0);
+    const cells = merch
+      ? ["—", "—", "—", "—", "—", "—", "—", num(rate(c.hp, uh)), num(rate(c.mp, uh))]
+      : [num(rate(c.xp, uh)), partyXp ? Math.round(100 * c.xp / partyXp) + "%" : "—",
+         num(c.up ? c.dmg / c.up : null), num(c.fs ? c.dmg / c.fs : null), num(c.up && c.hl ? c.hl / c.up : null),
+         num(c.pn ? c.pd / c.pn : null), num(rate(c.kb, uh)), num(rate(c.hp, uh)), num(rate(c.mp, uh))];
+    return '<tr><td><span class="dot" style="background:' + colorOf[ch.name] + '"></span>' + esc(ch.name) + '</td><td>' + esc(ch.class) +
+      '</td><td>' + esc(ch.level) + '</td><td>' + hoursFmt(uh) + '</td><td>' + cells.join("</td><td>") + '</td><td>' + num(ch.gold) + '</td></tr>';
+  });
+  return '<section><h2>Characters</h2><div class="scroll"><table><tr><th>Character</th><th>Class</th><th>Lvl</th><th>Uptime</th><th>XP / hr</th><th>Party XP share</th>' +
+    '<th>DPS (uptime)</th><th>DPS (fighting)</th><th>Heal / s</th><th>Contribution score</th><th>Kills / hr</th><th>HP pots / hr</th><th>MP pots / hr</th><th>Gold now</th></tr>' +
+    rows.join("") + '</table></div><div class="note">Kills = killing blows by that character. DPS (uptime) counts idle time; DPS (fighting) only minutes with damage. Contribution score is the game party-share metric, not DPS: damage x monster difficulty, heals x1.8 and damage tanked x0.25, decaying 20% a minute, so it runs about 300 times the points earned per second.</div></section>';
+}
+
+function topDrops(d, n) { return Object.entries(d).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => esc(k) + " ×" + v).join(", ") || "—"; }
+
+function renderSegments(A) {
+  const rows = Object.entries(A.segs).sort((a, b) => b[1].hours - a[1].hours).map(([seg, s]) =>
+    '<tr><td>' + esc(seg) + '</td><td>' + hoursFmt(s.hours) + '</td><td>' + num(rate(s.xp, s.hours)) + '</td><td>' + num(rate(s.gold, s.hours)) +
+    '</td><td>' + num(rate(s.kb, s.hours)) + '</td><td>' + s.dt + '</td><td style="text-align:left">' + topDrops(s.drops, 4) + '</td></tr>');
+  return '<section><h2>Farm comparison (map · mode)</h2>' + (rows.length
+    ? '<div class="scroll"><table><tr><th>Segment</th><th>Time</th><th>Party XP / hr</th><th>Account gold / hr</th><th>Kills / hr</th><th>Deaths</th><th style="text-align:left">Top drops</th></tr>' + rows.join("") + '</table></div>' +
+      '<div class="note">Each window is assigned to the map and farm mode most combat characters reported. Switch modes or maps for a while, then compare rows. Gold includes merchant activity.</div>'
+    : '<div class="empty">No farming data in this range.</div>') + '</section>';
+}
+
+function renderSales() {
+  const cut = RANGES[range] === Infinity ? -Infinity : endTime() - RANGES[range];
+  const ts = DATA.trades.filter((t) => t.t >= cut);
+  const byItem = {};
+  let total = 0;
+  for (const t of ts) {
+    const key = t.item + (t.lv ? " +" + t.lv : "");
+    const v = (t.unit || 0) * (t.q || 1);
+    const e = byItem[key] || (byItem[key] = { q: 0, v: 0 });
+    e.q += t.q || 1; e.v += v; total += v;
+  }
+  const top = Object.entries(byItem).sort((a, b) => b[1].v - a[1].v).slice(0, 10).map(([k, e]) =>
+    '<tr><td>' + esc(k) + '</td><td>' + e.q + '</td><td>' + num(e.v) + '</td><td>' + num(e.q ? e.v / e.q : 0) + '</td></tr>').join("");
+  const recent = ts.slice(-20).reverse().map((t) =>
+    '<tr><td>' + fmtTime(t.t) + '</td><td>' + esc(t.item + (t.lv ? " +" + t.lv : "")) + '</td><td>' + (t.q || 1) + '</td><td>' + num(t.unit) + '</td><td>' + esc(t.buyer) + '</td></tr>').join("");
+  return '<section><h2>Merchant sales</h2>' + (ts.length
+    ? '<div class="grid2"><div class="scroll"><table><tr><th>Top items by value</th><th>Qty</th><th>Value</th><th>Avg unit</th></tr>' + top + '</table>' +
+      '<div class="note">' + ts.length + ' sales, ' + num(total) + ' listed value (the game takes a sales tax).</div></div>' +
+      '<div class="scroll"><table><tr><th>Recent sale</th><th>Item</th><th>Qty</th><th>Unit</th><th>Buyer</th></tr>' + recent + '</table></div></div>'
+    : '<div class="empty">No sales in this range.</div>') + '</section>';
+}
+
+function renderDrops(A) {
+  const rows = Object.entries(A.drops).sort((a, b) => b[1] - a[1]).map(([k, n]) => '<tr><td>' + esc(k) + '</td><td>' + n + '</td><td>' + num(rate(n, A.farmHours), 2) + '</td></tr>').join("");
+  return '<section><h2>Drops looted by characters</h2>' + (rows
+    ? '<table><tr><th>Item</th><th>Count</th><th>Per farming hour</th></tr>' + rows + '</table>'
+    : '<div class="empty">No drops recorded in this range.</div>') + '</section>';
+}
+
+// The game secretly assigns one of a character's 42 inventory slots a small, permanent upgrade-roll
+// bonus (scroll-based upgrades only, never compounds - confirmed by reading node/server.js). It shows
+// up as a slot whose actual success rate runs a bit ahead of the shown chance, over enough attempts.
+// MIN_N is the smallest sample size before a slot's relative rate is trusted enough to highlight.
+const LUCKY_SLOT_MIN_N = 20;
+function renderUpgradeSlots() {
+  const slots = DATA.upgradeSlots || [];
+  const totalN = slots.reduce((a, s) => a + s.n, 0);
+  if (!totalN) {
+    return '<section><h2>SuperSellin: lucky upgrade slot</h2><div class="empty">No upgrade attempts logged yet. Upgrade items (with a scroll) while SuperSellin\'s CODE is running and this fills in.</div></section>';
+  }
+  // Two independent signals, same as the community "Lucky Slot Tracker" (by Crown, a game dev) plus
+  // ours: (1) win-rate vs the shown chance, which needs more attempts but works for any item/level;
+  // (2) the decoded roll itself, bucketed the same way Crown's tool does - 00.00 (the boosted roll's
+  // floor branch always lands here) vs >96.3 - which is a sharper per-attempt signal when available
+  // (needs parent.socket; falls back silently to just the win-rate signal if that's unavailable here).
+  let best = null;
+  for (const s of slots) {
+    if (s.n >= LUCKY_SLOT_MIN_N && s.relative != null && (!best || s.relative > best.relative)) best = s;
+  }
+  let rollBest = null;
+  for (const s of slots) {
+    if (!s.rolls) continue;
+    if (!rollBest || s.zero > rollBest.zero || (s.zero === rollBest.zero && s.high < rollBest.high)) rollBest = s;
+  }
+  const cells = slots.map((s) => {
+    const rel = s.relative;
+    const color = rel == null ? "#6a6a6a" : rel >= 103 ? "#69db7c" : rel <= 97 ? "#ff6b6b" : "#d0d0d0";
+    const isBest = best && best.slot === s.slot, isRollBest = rollBest && s.rolls && rollBest.slot === s.slot;
+    let cls = "lucky-slot";
+    if (isBest) cls += " candidate";
+    if (isRollBest) cls += " roll-candidate";
+    return '<div class="' + cls + '" title="' +
+      s.n + ' attempts, ' + s.expected.toFixed(1) + ' expected successes, ' + s.actual + ' actual' +
+      (s.rolls ? '; ' + s.rolls + ' rolls decoded (' + s.zero + ' at 00.00, ' + s.high + ' above 96.3)' : '') + '">' +
+      '<div class="ls-num">#' + s.slot + '</div><div class="ls-rel" style="color:' + color + '">' +
+      (rel == null ? "—" : rel.toFixed(0) + "%") + '</div><div class="ls-n">n=' + s.n +
+      (s.rolls ? '</div><div class="ls-roll">00:' + s.zero + ' >96:' + s.high : '') + '</div></div>';
+  }).join("");
+  const parts = [];
+  parts.push(best
+    ? 'Win-rate: slot <b>#' + best.slot + '</b> is running at <b>' + best.relative.toFixed(1) + '%</b> of its expected success rate over ' + best.n + ' scroll-based attempts (' + best.actual + ' actual vs ' + best.expected.toFixed(1) + ' expected).'
+    : 'Win-rate: no slot has ' + LUCKY_SLOT_MIN_N + '+ scroll-based attempts yet (' + totalN + ' logged so far).');
+  parts.push(rollBest
+    ? 'Decoded roll: slot <b>#' + rollBest.slot + '</b> leads with <b>' + rollBest.zero + '</b> rolls at 00.00 vs ' + rollBest.high + ' above 96.3, out of ' + rollBest.rolls + ' decoded.'
+    : 'Decoded roll: not available (needs parent.socket, or no rolls decoded yet).');
+  parts.push('The real effect (confirmed in the game\'s own server code) is small, around 102-105% on the win rate, so treat either signal as a lead worth another 50-100 attempts, not proof - more so if both agree on the same slot.');
+  return '<section><h2>SuperSellin: lucky upgrade slot</h2>' +
+    '<div class="lucky-summary">' + parts.join(" ") + '</div>' +
+    '<div class="lucky-grid">' + cells + '</div>' +
+    '<div class="note">Each tile is one inventory slot (0-41), the same slots the game permanently assigns one hidden lucky slot to at character creation. % = actual successes / sum of shown chance, scroll-based upgrades only (compounding and offering-only rerolls never get the bonus, so they are excluded here). Gold border = win-rate candidate (n >= ' + LUCKY_SLOT_MIN_N + '); blue border = roll-decode candidate (Crown\'s method: most 00.00 rolls, ties broken by fewest >96.3 rolls).</div></section>';
+}
+
+/* ---------- charts ---------- */
+function smooth(pts, n) {
+  return pts.map((p, i) => { const w = pts.slice(Math.max(0, i - n + 1), i + 1); return { t: p.t, v: w.reduce((s, q) => s + q.v, 0) / w.length }; });
+}
+function seriesPerChar(bs, fn, names, sm) {
+  return names.map((name) => ({ name, color: colorOf[name], pts: smooth(bs.filter((b) => b.c[name]).map((b) => ({ t: b.t, v: fn(b.c[name]) })).filter((p) => p.v != null), sm) }));
+}
+function drawChart(id, series, fmt) {
+  const cv = document.getElementById(id); if (!cv) return;
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr); ctx.clearRect(0, 0, w, h);
+  const pad = { l: 56, r: 10, t: 10, b: 22 };
+  const all = series.flatMap((s) => s.pts);
+  if (!all.length) { ctx.fillStyle = "#8b93a7"; ctx.font = "13px system-ui"; ctx.fillText("no data in range", pad.l, h / 2); cv._c = null; return; }
+  const tmin = Math.min(...all.map((p) => p.t)), tmax = Math.max(...all.map((p) => p.t), tmin + 1);
+  let ymin = Math.min(0, ...all.map((p) => p.v)), ymax = Math.max(...all.map((p) => p.v), 1e-9) * 1.08;
+  if (ymax === ymin) ymax = ymin + 1;
+  const X = (t) => pad.l + (t - tmin) / (tmax - tmin) * (w - pad.l - pad.r);
+  const Y = (v) => h - pad.b - (v - ymin) / (ymax - ymin) * (h - pad.t - pad.b);
+  ctx.font = "11px system-ui"; ctx.fillStyle = "#8b93a7"; ctx.strokeStyle = "#2b3040"; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const v = ymin + (ymax - ymin) * i / 4, y = Y(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w - pad.r, y); ctx.stroke();
+    ctx.textAlign = "right"; ctx.fillText(fmt(v), pad.l - 6, y + 4);
+  }
+  for (let i = 0; i <= 4; i++) { const t = tmin + (tmax - tmin) * i / 4; ctx.textAlign = i === 4 ? "right" : i === 0 ? "left" : "center"; ctx.fillText(new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), X(t), h - 6); }
+  for (const s of series) {
+    if (!s.pts.length) continue;
+    ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.beginPath();
+    s.pts.forEach((p, i) => (i ? ctx.lineTo(X(p.t), Y(p.v)) : ctx.moveTo(X(p.t), Y(p.v))));
+    ctx.stroke();
+  }
+  cv._c = { series, tmin, tmax, X, fmt, pad, w };
+}
+function legend(series) { return '<div class="legend">' + series.map((s) => '<span><span class="dot" style="background:' + s.color + '"></span>' + esc(s.name) + '</span>').join("") + '</div>'; }
+function chartBox(id, title, series) { return '<section><h2>' + esc(title) + '</h2>' + legend(series) + '<canvas id="' + id + '"></canvas></section>'; }
+
+function attachTips() {
+  const tip = $("#tip");
+  document.querySelectorAll("canvas").forEach((cv) => {
+    cv.onmousemove = (e) => {
+      const c = cv._c; if (!c) return;
+      const r = cv.getBoundingClientRect(), x = e.clientX - r.left;
+      const t = c.tmin + (x - c.pad.l) / (c.w - c.pad.l - c.pad.r) * (c.tmax - c.tmin);
+      let html = "<b>" + fmtTime(t) + "</b>";
+      for (const s of c.series) {
+        if (!s.pts.length) continue;
+        let best = s.pts[0]; for (const p of s.pts) if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
+        html += '<div><span class="dot" style="background:' + s.color + '"></span>' + esc(s.name) + ": " + c.fmt(best.v) + "</div>";
+      }
+      tip.innerHTML = html; tip.style.display = "block";
+      tip.style.left = Math.min(e.clientX + 14, window.innerWidth - 200) + "px"; tip.style.top = e.clientY + 14 + "px";
+    };
+    cv.onmouseleave = () => { tip.style.display = "none"; };
+  });
+}
+
+function toast(text) {
+  const el = document.createElement("div"); el.className = "toast"; el.textContent = text;
+  $("#toasts").appendChild(el); setTimeout(() => el.remove(), 12000);
+}
+function announceSales() {
+  const newest = DATA.trades.length ? DATA.trades[DATA.trades.length - 1].t : 0;
+  if (lastTradeT != null) {
+    for (const t of DATA.trades) {
+      if (t.t > lastTradeT) toast("Sale: " + t.item + (t.lv ? " +" + t.lv : "") + " ×" + (t.q || 1) + " to " + t.buyer + " for " + num((t.unit || 0) * (t.q || 1)));
+    }
+  }
+  lastTradeT = Math.max(lastTradeT || 0, newest);
+}
+
+function render() {
+  prep();
+  $("#title").textContent = DATA.title || "Farm Dashboard";
+  $("#ranges").innerHTML = Object.keys(RANGES).map((k) => '<button class="btn' + (k === range ? " on" : "") + '" data-r="' + k + '">' + k + "</button>").join(" ");
+  document.querySelectorAll("[data-r]").forEach((b) => (b.onclick = () => { range = b.dataset.r; try { localStorage.setItem(FEED ? "al_range_live" : "al_range", range); } catch (e) {} refresh(); }));
+  if (FEED) {
+    const pill = $("#pill"); pill.style.display = ""; pill.className = "pill" + (Date.now() - lastFetchOk < 15000 ? " on" : "");
+    pill.textContent = Date.now() - lastFetchOk < 15000 ? "LIVE" : "DISCONNECTED";
+    $("#autoLabel").style.display = "none";
+  }
+  $("#meta").textContent = DATA.buckets.length || (DATA.now || []).length ? "data through " + fmtTime(endTime()) + " · built " + fmtTime(DATA.generated) : "";
+  const nowHtml = '<div id="nowbox">' + renderNow() + '</div>', feedHtml = '<div id="feedbox">' + renderFeed() + '</div>',
+    gearHtml = '<div id="gearbox">' + renderGearSheet() + '</div>';
+  if (!DATA.buckets.length) {
+    $("#main").innerHTML = nowHtml + gearHtml + feedHtml + '<div class="empty">No in-game telemetry in this range yet (DPS, kills, sales, farm comparison). ' + (FEED
+      ? 'Waiting for pushes: sync the LiveConfig slot, then restart each character\'s CODE run.'
+      : 'Run this tool with --serve while CODE is running, then run it again to build a static snapshot from the recorded data.') + '</div>';
+    attachTips(); return;
+  }
+  const bs = inRange(), A = aggregate(bs);
+  const xpS = seriesPerChar(bs, (c) => (c.up >= 20 ? c.xp / (c.up / 3600) : null), combat, DATA.bucketMs <= 60000 ? 5 : 3);
+  const dpsS = seriesPerChar(bs, (c) => (c.up >= 20 ? c.dmg / c.up : null), combat, DATA.bucketMs <= 60000 ? 5 : 3);
+  const kbS = seriesPerChar(bs, (c) => (c.up >= 20 ? c.kb / (c.up / 3600) : null), combat, DATA.bucketMs <= 60000 ? 5 : 3);
+  const tkS = seriesPerChar(bs, (c) => (c.up >= 20 ? c.tk / c.up : null), combat, DATA.bucketMs <= 60000 ? 5 : 3);
+  let g = 0, s = 0;
+  const goldS = [{ name: "Account gold (cumulative, transfers excluded)", color: COLORS[2], pts: bs.map((b) => ({ t: b.t, v: (g += b.gold_net) })) },
+                 { name: "Sales listed value (cumulative)", color: COLORS[1], pts: bs.map((b) => ({ t: b.t, v: (s += b.sales_v) })) }];
+  const potS = [{ name: "Potions used / hr", color: COLORS[3], pts: smooth(bs.map((b) => ({ t: b.t, v: Object.values(b.c).reduce((a, c) => a + c.hp + c.mp, 0) / (DATA.bucketMs / 3.6e6) })), 3) }];
+
+  $("#main").innerHTML = nowHtml + gearHtml + renderCards(A) + renderCharTable(A) +
+    '<div class="grid2">' + chartBox("c1", "XP per hour", xpS) + chartBox("c2", "Damage per second (uptime average)", dpsS) +
+    chartBox("c3", "Gold (cumulative over range)", goldS) + chartBox("c4", "Killing blows per hour", kbS) + chartBox("c5", "Potion use per hour", potS) + chartBox("c6", "Damage taken per second", tkS) + '</div>' +
+    renderSurvivability(A) + renderRulesWatch(A) + renderSegments(A) + renderSales() + renderUpgradeSlots() + renderDrops(A) + feedHtml;
+  drawChart("c1", xpS, num); drawChart("c2", dpsS, num); drawChart("c3", goldS, num); drawChart("c4", kbS, num); drawChart("c5", potS, num); drawChart("c6", tkS, num);
+  attachTips();
+}
+
+function updateNow() {
+  const box = $("#nowbox"), feed = $("#feedbox"), gear = $("#gearbox");
+  if (box) box.innerHTML = renderNow();
+  if (gear) gear.innerHTML = renderGearSheet();
+  if (feed) feed.innerHTML = renderFeed();
+  if (FEED) {
+    const pill = $("#pill"), ok = Date.now() - lastFetchOk < 15000;
+    pill.className = "pill" + (ok ? " on" : ""); pill.textContent = ok ? "LIVE" : "DISCONNECTED";
+  }
+}
+let lastEventT = null;
+function announceEvents() {
+  const evs = DATA.events || [];
+  if (lastEventT != null) {
+    for (const e of evs) {
+      if (e.t <= lastEventT) continue;
+      if (e.e === "death") toast(e.n + " died" + (e.by ? " to " + e.by : ""));
+      else if (e.e === "lvl") toast(e.n + " reached level " + e.lv);
+    }
+  }
+  lastEventT = Math.max(lastEventT || 0, ...evs.map((e) => e.t), 0);
+}
+function startStream() {
+  if (!FEED || typeof EventSource === "undefined") return;
+  const es = new EventSource(FEED.replace("/data", "/stream"));
+  es.onmessage = (m) => {
+    try {
+      const p = JSON.parse(m.data);
+      DATA.now = p.now; DATA.events = p.events; lastFetchOk = Date.now();
+      announceEvents(); updateNow();
+    } catch (e) { /* ignore a malformed message */ }
+  };
+}
+
+let refreshing = false;
+async function refresh() {
+  if (FEED) {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      const r = await fetch(FEED + "?range=" + range, { cache: "no-store" });
+      DATA = await r.json(); lastFetchOk = Date.now(); prep(); announceSales(); announceEvents();
+    } catch (e) { /* keep showing the last data; the pill turns to DISCONNECTED */ }
+    refreshing = false;
+  }
+  render();
+}
+
+window.addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(render, 150); });
+if (FEED) {
+  lastFetchOk = Date.now(); prep(); lastTradeT = DATA.trades.length ? DATA.trades[DATA.trades.length - 1].t : 0;
+  lastEventT = Math.max(0, ...(DATA.events || []).map((e) => e.t));
+  setInterval(refresh, 5000);
+  setInterval(updateNow, 1000);   // keeps "updated 3 s ago" ticking between pushes
+  startStream();
+} else {
+  let autoOn = false; try { autoOn = localStorage.getItem("al_auto") === "1"; } catch (e) {}
+  $("#auto").checked = autoOn;
+  $("#auto").onchange = (e) => { try { localStorage.setItem("al_auto", e.target.checked ? "1" : "0"); } catch (err) {} };
+  setInterval(() => { if ($("#auto").checked) location.reload(); }, 60000);
+}
+refresh();
+</script>
+</body>
+</html>

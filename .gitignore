@@ -3,3 +3,8 @@
 # .js files are the public copies meant for this repo.
 adventureland/
 history/
+
+# Dashboard tool output: history and pages built from your account's telemetry
+data/
+dashboard/
+
