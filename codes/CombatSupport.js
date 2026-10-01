@@ -50,26 +50,42 @@ function offloadToMerchant() {
 setInterval(offloadToMerchant, 500);
 
 // --- QUARTERMASTER REQUEST ROUTINE ---
-var lastDeliveryRequest = 0;
+// potionRequestSentAt tracks the CURRENT low-stock episode, not just "time since last send" - a flat
+// 60s throttle was the actual bug: a real restock round-trip (merchant closes stand, buys, travels,
+// delivers) can easily take longer than that, so checkPotionStock (every 10s) would fire again and
+// re-request BEFORE the first delivery ever arrived, queuing a second full delivery for potions that
+// were already on their way - that's what produced two ~3000-potion runs back to back. Clearing the
+// flag only once stock is confirmed to have actually recovered (not just "60s elapsed") means no
+// second request can go out while the first is still in flight, no matter how long that trip takes.
+// A long fallback (5 min, well past any real round-trip) still allows a retry if the CM message
+// itself was ever lost (delivery, not just request, is never guaranteed - see the code-messages doc).
+var potionRequestSentAt = 0; // 0 = no outstanding request
 
 function checkPotionStock() {
     if (character.rip) return;
 
     let hpStock = countItem("hpot1");
     let mpStock = countItem("mpot1");
+    let low = hpStock < 1500 || mpStock < 1500;
 
-    // Request restock when under 2000, target 5000 (rate-limited to every 60s)
-    if ((hpStock < 2000 || mpStock < 2000) && Date.now() - lastDeliveryRequest > 60000) {
-        send_cm("SuperSellin", {
-            action: "request_potions",
-            hpNeeded: Math.max(0, 5000 - hpStock),
-            mpNeeded: Math.max(0, 5000 - mpStock),
-            x: character.x,
-            y: character.y,
-            map: character.map
-        });
-        lastDeliveryRequest = Date.now();
-        set_message("Requested Pots");
+    if (!low) {
+        if (potionRequestSentAt) set_message(""); // clear the stale "Requested Pots" label now that it's resolved
+        potionRequestSentAt = 0;
+        return;
     }
+    if (potionRequestSentAt && Date.now() - potionRequestSentAt < 5 * 60 * 1000) return;
+
+    // Flat top-off instead of "fill to 5000": simpler, and potions stack high enough that overshooting
+    // a bit costs nothing - the goal is not running this again for a long while, not precise accounting.
+    send_cm("SuperSellin", {
+        action: "request_potions",
+        hpNeeded: hpStock < 1500 ? 9999 : 0,
+        mpNeeded: mpStock < 1500 ? 9999 : 0,
+        x: character.x,
+        y: character.y,
+        map: character.map
+    });
+    potionRequestSentAt = Date.now();
+    set_message("Requested Pots");
 }
 setInterval(checkPotionStock, 10000);

@@ -101,10 +101,13 @@ function handleSkills(target) {
 
     // Multi-target shots — each deals less damage per target (5-Shot 0.5x, 3-Shot 0.7x), so they're
     // only a DPS gain with enough monsters in range; against a single target a normal attack wins.
-    // Prefer 5-Shot (needs 4+ extras) over 3-Shot (needs 1+ extra) once it's unlocked.
-    if (CONFIG.use3shot) {
+    // Prefer 5-Shot (needs 4+ extras) over 3-Shot (needs 1+ extra) once it's unlocked. In support_tank
+    // mode this is additionally gated on FARM_CONFIG.tankMultishotEnabled (hot-reloadable toggle,
+    // Targets slot) - free_for_all is never gated by it, multi-shot is always allowed there.
+    let inTankMode = FARM_CONFIG.mode === "support_tank";
+    if (CONFIG.use3shot && (!inTankMode || FARM_CONFIG.tankMultishotEnabled)) {
         // In support_tank mode, extra targets must already be aggroed on the tank.
-        let onlyTargeting = FARM_CONFIG.mode === "support_tank" ? CONFIG.tankName : null;
+        let onlyTargeting = inTankMode ? CONFIG.tankName : null;
 
         if (skillUnlocked("5shot") && !is_on_cooldown("5shot") && dist <= character.range) {
             const cost5Shot = (G.skills["5shot"] && G.skills["5shot"].mp) || 500;

@@ -8,8 +8,13 @@ var FARM_CONFIG = {
     mode: "support_tank",
     targetTypes: ["phoenix", "snake", "osnake"],
     // Agitate (AoE taunt) can grab anything nearby, including a powerful spawn nobody wanted pulled -
-    // opt-in only, and only in free_for_all (this slot hot-reloads, so flip it live with no restart).
-    agitateEnabled: false
+    // opt-in only, and only in support_tank mode (this slot hot-reloads, so flip it live with no restart).
+    agitateEnabled: false,
+    // Ranger 3-Shot/5-Shot in support_tank mode: the extra targets are always already aggroed on the
+    // tank (never someone else's mob, unlike Agitate), so this defaults ON - toggle it off live if you
+    // ever want the ranger single-target-focused on the tank's target instead. Always allowed in
+    // free_for_all regardless of this flag.
+    tankMultishotEnabled: true
 };
 
 // A monster we're willing to fight: right type, alive, and not locked onto a

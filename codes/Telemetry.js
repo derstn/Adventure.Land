@@ -122,6 +122,57 @@ function telemetryStats() {
     };
 }
 
+// Gear-up spend visibility (SuperSellin only). Telemetry.js is shared by every character, but
+// gear-up's state (GEARUP_CONFIG, gearupSpendLog, etc.) only exists where supersellin.js defines it -
+// checked defensively so this is a no-op everywhere else. Reports the rolling-hour spend total, the
+// configured cap, what's currently blocking further spend (0 if nothing), the active item and its
+// progress, and the oldest still-counted ledger entry's timestamp so the dashboard can show roughly
+// when headroom next opens up (the exact moment depends on how many more entries age out after that
+// one, but the oldest is the first and usually the most informative point).
+function telemetryGearup() {
+    if (typeof GEARUP_CONFIG === "undefined" || typeof gearupSpendLog === "undefined" || typeof gearupRecentSpend !== "function") return null;
+    let activeItem = typeof gearupActiveItem === "function" ? gearupActiveItem() : null;
+    let oldest = gearupSpendLog.length ? Math.min.apply(null, gearupSpendLog.map(e => e.t)) : null;
+    return {
+        spend: gearupRecentSpend(),
+        cap: GEARUP_CONFIG.maxSpendPerHour,
+        blocked: (typeof gearupBlockedCost === "number" && gearupBlockedCost) || 0,
+        item: activeItem,
+        banked: activeItem && typeof gearupBanked !== "undefined" ? (gearupBanked[activeItem] || 0) : 0,
+        need: GEARUP_CONFIG.copiesPerItem,
+        oldest: oldest,
+        // Per-climb cost breakdown (how many items/scrolls/gold it actually took for each +9, not just
+        // the aggregate rolling-hour cap): the in-progress climb's running totals, plus the last 10
+        // finished climbs, newest last.
+        climb: typeof gearupClimb !== "undefined" ? gearupClimb : null,
+        history: typeof gearupHistory !== "undefined" ? gearupHistory.slice(-10) : []
+    };
+}
+
+// Active cosmetics (character.cx) - dashboard character-portrait rendering. Despite data-character.md's
+// doc example showing a flat array (cx: ["santahat"]), real live data confirmed this session (captured
+// from the official /player/<name> page's own data-cx attributes, e.g. {"hair":"hairdo206"}) is a
+// place-keyed OBJECT whenever more than a single slot is active - {"hair":"...", "head":"...", ...}.
+// The array form may still occur (the doc isn't fabricated, just possibly a simplified single-item
+// case), so both shapes are accepted here rather than assuming one. An earlier version of this
+// function only accepted the array shape and silently discarded every real character's cx as a
+// result - confirmed by fetching this account's own live telemetry and finding cx: null everywhere
+// despite every character visibly having hair/hat cosmetics equipped.
+function telemetryCleanCx(cx) {
+    if (Array.isArray(cx)) {
+        let out = cx.filter(c => typeof c === "string" && c).slice(0, 8).map(c => c.slice(0, 24));
+        return out.length ? out : null;
+    }
+    if (cx && typeof cx === "object") {
+        let out = {};
+        for (let place of Object.keys(cx).slice(0, 12)) {
+            if (typeof cx[place] === "string" && cx[place]) out[place.slice(0, 16)] = cx[place].slice(0, 24);
+        }
+        return Object.keys(out).length ? out : null;
+    }
+    return null;
+}
+
 // name -> number maps (drops, damage taken by monster type, kills by monster type)
 function telemetryCleanMap(m) {
     if (!m || typeof m !== "object") return null;
@@ -159,6 +210,41 @@ function telemetryCleanEquip(eq) {
     return Object.keys(out).length ? out : null;
 }
 
+// One climb record: {item, gold, items, attempts, startedAt, finishedAt?} numbers/strings + a
+// scrolls name->qty map (see gearupClimb/gearupHistory in supersellin.js).
+function telemetryCleanClimb(c) {
+    if (!c || typeof c !== "object" || typeof c.item !== "string") return null;
+    let out = { item: c.item.slice(0, 24) };
+    for (let k of ["gold", "items", "attempts", "startedAt", "finishedAt"]) {
+        if (typeof c[k] === "number" && isFinite(c[k])) out[k] = Math.round(c[k]);
+    }
+    if (c.scrolls && typeof c.scrolls === "object") {
+        let scrolls = {};
+        for (let name of Object.keys(c.scrolls).slice(0, 8)) {
+            if (typeof c.scrolls[name] === "number" && isFinite(c.scrolls[name])) scrolls[name.slice(0, 16)] = Math.round(c.scrolls[name]);
+        }
+        if (Object.keys(scrolls).length) out.scrolls = scrolls;
+    }
+    return out;
+}
+
+// {spend, cap, blocked, banked, need, oldest} numbers + {item} string + {climb, history} (see telemetryGearup).
+function telemetryCleanGearup(gu) {
+    if (!gu || typeof gu !== "object") return null;
+    let out = {};
+    for (let k of ["spend", "cap", "blocked", "banked", "need", "oldest"]) {
+        if (typeof gu[k] === "number" && isFinite(gu[k])) out[k] = Math.round(gu[k]);
+    }
+    if (typeof gu.item === "string") out.item = gu.item.slice(0, 24);
+    let climb = telemetryCleanClimb(gu.climb);
+    if (climb) out.climb = climb;
+    if (Array.isArray(gu.history)) {
+        let history = gu.history.map(telemetryCleanClimb).filter(Boolean).slice(0, 10);
+        if (history.length) out.history = history;
+    }
+    return Object.keys(out).length ? out : null;
+}
+
 // Keep only known fields of the expected type before this character's own row is sent out.
 function telemetryCleanRow(r) {
     if (!r || typeof r !== "object" || typeof r.t !== "number" || typeof r.n !== "string") return null;
@@ -166,17 +252,21 @@ function telemetryCleanRow(r) {
     for (let k of ["lv", "xp", "mx", "g", "hp", "mhp", "mp", "mmp", "pd", "dmg", "hl", "kb", "dt", "gs", "gr", "tk", "hr", "hpp", "mpp", "x", "y", "cc", "ccm", "ping", "xpm", "goldm", "luckm", "su"]) {
         if (typeof r[k] === "number" && isFinite(r[k])) out[k] = r[k];
     }
-    for (let k of ["c", "m", "md", "tg", "sv"]) {
+    for (let k of ["c", "m", "md", "tg", "sv", "skin"]) {
         if (typeof r[k] === "string") out[k] = r[k].slice(0, 32);
     }
     for (let k of ["dr", "tkm", "km", "bf"]) {
         let m = telemetryCleanMap(r[k]);
         if (m) out[k] = m;
     }
+    let cx = telemetryCleanCx(r.cx);
+    if (cx) out.cx = cx;
     let st = telemetryCleanStats(r.st);
     if (st) out.st = st;
     let eq = telemetryCleanEquip(r.eq);
     if (eq) out.eq = eq;
+    let gu = telemetryCleanGearup(r.gu);
+    if (gu) out.gu = gu;
     return out;
 }
 
@@ -198,7 +288,13 @@ function telemetryBuildRow(w) {
         ping: typeof character.ping === "number" ? Math.round(character.ping) : null,
         xpm: character.xpm, goldm: character.goldm, luckm: character.luckm,
         sv: server.region + " " + server.id, su: telemetryStartedAt,
-        bf: telemetryBuffs(), eq: telemetryEquip(), st: telemetryStats()
+        bf: telemetryBuffs(), eq: telemetryEquip(), st: telemetryStats(), gu: telemetryGearup(),
+        // Dashboard character-portrait rendering (hotlinked from adventure.land's own data.js/image
+        // URLs - see adventureland_respect_game_art.md): both plain documented character fields
+        // (data-character.md), just never previously sent. Live "now" state only, same as eq/st -
+        // no need to bucket a cosmetic loadout over time.
+        skin: typeof character.skin === "string" ? character.skin : null,
+        cx: character.cx // shape (array or place-keyed object) validated by telemetryCleanCx below, not here
     };
     return telemetryCleanRow(row);
 }
@@ -263,6 +359,31 @@ function telemetryPushEvent(ev) {
     telemetryScheduleFlush();
 }
 
+// --- bank pack snapshots (merchant only, dashboard "Bank" panel) ---
+// character.bank exists only while physically inside the bank (banking.md) and holds shared gold plus
+// every pack open on that floor - dynamic, so this iterates whatever keys are actually present rather
+// than hardcoding "items0".."itemsN" (the account can open more packs over time). Each pack is 42
+// slots, same shape as character.items (banking.md's own bank_store/bank_retrieve examples). Call this
+// right after arriving at the bank, while character.bank is populated - it does not travel there
+// itself, it only piggybacks on trips gear-up/exchange-overflow already make (see supersellin.js), so
+// freshness is bounded by how often those already run.
+function telemetrySnapshotBank() {
+    if (!telemetryIsMerchant || !character.bank) return;
+    let packs = {};
+    for (let name of Object.keys(character.bank)) {
+        if (name === "gold") continue;
+        let pack = character.bank[name];
+        if (!Array.isArray(pack)) continue;
+        let slots = [];
+        for (let i = 0; i < 42; i++) {
+            let it = pack[i];
+            slots.push(it && typeof it.name === "string" ? { n: it.name.slice(0, 24), l: it.level || 0, q: it.q || 1 } : null);
+        }
+        packs[name.slice(0, 16)] = slots;
+    }
+    if (Object.keys(packs).length) telemetryLivePush({ k: "bank", row: { t: Date.now(), packs: packs } }, true);
+}
+
 // --- merchant sales ---
 function telemetrySnapshotSlots() {
     let out = {};
@@ -303,11 +424,23 @@ function telemetryOnSale(d) {
 // CODE at all. character.q.upgrade and character.items are both plain documented character fields,
 // so this works regardless.
 var telemetryUpgradePending = null; // { slot, chance, item, level, scroll, offering, roll } for the in-flight attempt
+var telemetryUpgradeResolveAt = 0;  // 0 = not yet waiting to read the outcome; else the earliest time it's safe to read it
 
 // Runs every 200ms (a local property read, not a server call). Catches an attempt's shown chance the
-// moment it starts (character.q.upgrade appears), then reads the outcome off character.items the
-// moment it ends (character.q.upgrade disappears again): the slot holds the leveled-up item on
-// success, or is empty on failure - both set server-side in the same tick q.upgrade is deleted.
+// moment it starts (character.q.upgrade appears), then reads the outcome off character.items after a
+// short grace period once it ends (character.q.upgrade disappears again).
+//
+// The grace period is required, not optional: the data-character doc explicitly warns "Character
+// updates are live but asynchronous. A Promise result and the next character update can arrive
+// separately" - q.upgrade clearing and character.items[slot] actually reflecting the outcome are two
+// separate local state updates with no guarantee they land in the same tick. Reading immediately (the
+// original design) intermittently read character.items before it had caught up, misreporting real
+// successes as failures - confirmed by a real gear-up log where the item kept climbing through
+// several "fail"-labeled attempts, and reproduced directly in a headless-Chrome test that injects an
+// artificial gap between the two updates (see adventureland_project.md). ~400ms (2 poll cycles) is a
+// generous, cheap allowance for a same-client local update lag.
+var TELEMETRY_UPGRADE_RESOLVE_GRACE_MS = 400;
+
 function telemetryCheckUpgrade() {
     let q = character.q && character.q.upgrade;
     if (q && typeof q.num === "number") {
@@ -322,11 +455,18 @@ function telemetryCheckUpgrade() {
             scroll: p && typeof p.scroll === "string" ? p.scroll : null,
             offering: p && typeof p.offering === "string" ? p.offering : null
         };
+        telemetryUpgradeResolveAt = 0;
         return;
     }
     let pending = telemetryUpgradePending;
     if (!pending) return;
+    if (!telemetryUpgradeResolveAt) {
+        telemetryUpgradeResolveAt = Date.now() + TELEMETRY_UPGRADE_RESOLVE_GRACE_MS;
+        return;
+    }
+    if (Date.now() < telemetryUpgradeResolveAt) return; // still within the grace period, check again next tick
     telemetryUpgradePending = null;
+    telemetryUpgradeResolveAt = 0;
     let it = character.items[pending.slot];
     let success = !!(it && it.name === pending.item && (it.level || 0) === (pending.level || 0) + 1);
     telemetryLivePush({

@@ -87,9 +87,10 @@ function checkAggro() {
 // Agitate: the AoE version of Taunt - grabs every nearby monster in one call instead of picking
 // them off one at a time. Risky: it can just as easily grab a powerful spawn nobody meant to pull
 // and overwhelm the party, so it's opt-in only (FARM_CONFIG.agitateEnabled, off by default) and only
-// in free_for_all (support_tank already gets full coverage from single-target Taunt/checkAggro).
+// in support_tank mode - in free_for_all it would peel a target another party member is already
+// fighting onto the tank instead, which is the opposite of what free_for_all is for.
 function manageAgitate() {
-    if (!FARM_CONFIG.agitateEnabled || FARM_CONFIG.mode !== "free_for_all" || !skillUnlocked("agitate")) return false;
+    if (!FARM_CONFIG.agitateEnabled || FARM_CONFIG.mode !== "support_tank" || !skillUnlocked("agitate")) return false;
     if (is_on_cooldown("agitate")) return false;
     const cost = (G.skills.agitate && G.skills.agitate.mp) || 420;
     if (!canSpendMp(cost, MP_CONFIG.warriorSkillReserve)) return false;

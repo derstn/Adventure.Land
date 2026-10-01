@@ -54,6 +54,20 @@ function maintainParty() {
 }
 setInterval(maintainParty, 3000);
 
+// --- AUTO RESPAWN ---
+// Nothing else calls respawn() anywhere - a dead character just sits tombstoned forever otherwise.
+// The game doesn't document an exact post-death cooldown length (respawn()'s own doc example just
+// shows a 15s setTimeout as a rough illustration), so instead of guessing a fixed delay this simply
+// retries on the same 3s cadence as maintainParty; respawn() rejects harmlessly while still on
+// cooldown, and succeeds the moment the server allows it. Once character.rip flips back to false,
+// every character's own main loop (all of them poll current state every tick, none save a "resume
+// point") picks back up on its very next tick with no extra handling needed here.
+function maintainRespawn() {
+    if (!character.rip) return;
+    respawn().catch(function () {});
+}
+setInterval(maintainRespawn, 3000);
+
 function on_party_invite(name) {
     if (PARTY_CONFIG.members.includes(name)) accept_party_invite(name);
 }

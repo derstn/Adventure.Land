@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Farm Dashboard</title>
+<title>Derstn's AdventureLand Status</title>
 <style>
   :root { --bg:#12141a; --panel:#1b1e27; --line:#2b3040; --text:#e6e8ee; --dim:#8b93a7; --accent:#4dabf7; --good:#69db7c; }
   * { box-sizing: border-box; }
@@ -94,16 +94,26 @@
   .gslot { color:var(--dim); text-align:left; }
   .gitem { text-align:left; color:#e6e8ee; }
   .gstats { flex:1; min-width:170px; grid-template-columns:repeat(2,1fr); margin-top:0; }
+  .gustatus { margin-top:8px; padding:6px 6px 4px; background:#111; border:1px solid #000; box-shadow: inset 0 0 0 1px #262626; }
+  .gustatus .guhead { display:flex; justify-content:space-between; font-size:11px; color:var(--dim); margin-bottom:4px; }
+  .gustatus .guhead b { color:#e6e8ee; font-weight:600; }
+  .gustatus .gumeta { font-size:11px; color:var(--dim); margin-top:3px; }
+  /* Collapsible panels (native <details>/<summary>, no JS) - same flat-panel look as <section>. */
+  details.collapsible { background:var(--panel); border:1px solid #000; box-shadow: inset 0 0 0 1px #2e2e2e; padding:12px 14px; margin-bottom:14px; }
+  details.collapsible > summary { font-size:13px; color:#d6b45a; text-transform:uppercase; letter-spacing:.06em; cursor:pointer; list-style:none; }
+  details.collapsible > summary::-webkit-details-marker { display:none; }
+  details.collapsible > summary::before { content:"\25b8  "; }
+  details.collapsible[open] > summary::before { content:"\25be  "; }
+  details.collapsible[open] > summary { margin-bottom:8px; }
+  canvas.bar-chart { height:auto; }
 </style>
 </head>
 <body>
 <header>
-  <h1 id="title">Farm Dashboard</h1>
+  <h1 id="title">Derstn's AdventureLand Status</h1>
   <span class="pill" id="pill" style="display:none">LIVE</span>
-  <span class="sub" id="meta"></span>
   <span class="spacer"></span>
   <span id="ranges"></span>
-  <label class="sub" id="autoLabel"><input type="checkbox" id="auto"> auto-refresh (60s)</label>
 </header>
 <main id="main"></main>
 <div id="tip"></div>
@@ -143,6 +153,245 @@ function hoursFmt(h) { return h < 1 ? Math.round(h * 60) + " min" : h.toFixed(1)
 function ago(ms) {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
   return s < 90 ? s + " s ago" : s < 5400 ? Math.round(s / 60) + " min ago" : hoursFmt(s / 3600) + " ago";
+}
+
+/* ---------- game art (hotlinked from adventure.land - never downloaded/stored, see
+   adventureland_respect_game_art.md) ----------
+   Loads the SAME data.js the official site's own client loads (a plain <script src>, not fetch/XHR,
+   so it isn't subject to CORS) and ports the exact item-icon and character-portrait compositor math
+   from the game's own js/html.js / js/old_common_functions.js (kaansoral/adventureland_mongodb),
+   verified by reading that real source this session - not re-derived from guesswork. Every image src
+   stays an absolute https://adventure.land/... URL; nothing here ever downloads or embeds a byte of
+   the actual art into this project. */
+const GAME_ART_ORIGIN = "https://adventure.land";
+let gameArtReady = false;
+let IID = null, SPR_T = null, SPR_SIZE = null; // built once by precomputeSpriteIndex()
+
+function loadGameData() {
+  if (typeof document === "undefined") return; // headless/test harness without a real DOM
+  const s = document.createElement("script");
+  s.src = GAME_ART_ORIGIN + "/data.js";
+  s.onload = () => {
+    try {
+      precomputeSpriteIndex();
+      gameArtReady = true;
+      render();
+    } catch (e) { /* game art stays off; the rest of the dashboard is unaffected either way */ }
+  };
+  s.onerror = () => { /* offline, or adventure.land unreachable - fall back to text/letters forever */ };
+  document.head.appendChild(s);
+}
+
+// item_container's lookup (js/html.js:6002-6019): item name -> G.items[name].skin -> G.positions[skin]
+// -> [imageset_or_"", col, row] -> G.imagesets[imageset] for the sheet file/geometry. Same CSS-sprite
+// crop technique the official site itself uses (negative margin-left/margin-top inside a clipped box).
+function itemIconHtml(itemName, size) {
+  if (!gameArtReady || !window.G || !itemName) return null;
+  const G = window.G;
+  let skin = (G.items && G.items[itemName] && G.items[itemName].skin) || itemName;
+  if (!G.positions || !G.positions[skin]) skin = "placeholder";
+  const pos = G.positions && G.positions[skin];
+  if (!pos) return null;
+  const pack = G.imagesets && G.imagesets[pos[0] || "pack_20"];
+  if (!pack) return null;
+  size = size || 32;
+  const scale = size / pack.size;
+  const mx = -(pos[1] * size), my = -(pos[2] * size);
+  const w = pack.columns * pack.size * scale, h = pack.rows * pack.size * scale;
+  return '<div style="width:' + size + 'px;height:' + size + 'px;overflow:hidden;position:relative;display:inline-block;vertical-align:middle">' +
+    '<img style="margin-left:' + mx + 'px;margin-top:' + my + 'px;width:' + w + 'px;height:' + h + 'px" src="' + GAME_ART_ORIGIN + pack.file + '"></div>';
+}
+
+// precompute_image_positions (js/html.js:7486-7529), trimmed: skips the G.dimensions/SSU/slender-prop
+// adjustment lines (cosmetic edge case, not needed for a basic faithful portrait - noted, not silently
+// dropped). Builds IID (cosmetic/character id -> [sheetW, sheetH, xStart, yStart, cellW, cellH,
+// colsPerFrame, file, type]) and SPR_T (id -> sprite type, e.g. "hair"/"hat"/"armor") from G.sprites.
+function precomputeSpriteIndex() {
+  const G = window.G;
+  IID = {}; SPR_T = {}; SPR_SIZE = {};
+  for (const name in G.sprites) {
+    const s_def = G.sprites[name];
+    if (s_def.skip) continue;
+    let row_num = 4, col_num = 3, s_type = "full";
+    const inArr = (v, a) => a.indexOf(v) !== -1;
+    if (inArr(s_def.type, ["animation"])) { row_num = 1; s_type = s_def.type; }
+    if (inArr(s_def.type, ["tail"])) { col_num = 4; s_type = s_def.type; }
+    if (inArr(s_def.type, ["v_animation", "head", "hair", "hat", "s_wings", "face", "makeup", "beard"])) { col_num = 1; s_type = s_def.type; }
+    if (inArr(s_def.type, ["a_makeup", "a_hat"])) { col_num = s_def.frames || 3; s_type = s_def.type; }
+    if (s_def.type === "head" && s_def.frames) col_num = s_def.frames;
+    if (inArr(s_def.type, ["wings", "body", "armor", "skin", "character"])) s_type = s_def.type;
+    if (inArr(s_def.type, ["emblem", "gravestone"])) { row_num = 1; col_num = 1; s_type = s_def.type; }
+    const matrix = s_def.matrix;
+    if (!matrix) continue;
+    const file0 = s_def.file.split("?")[0];
+    const width = (G.images && G.images[file0] && G.images[file0].width) || s_def.width || 312;
+    const height = (G.images && G.images[file0] && G.images[file0].height) || s_def.height || 288;
+    for (let i = 0; i < matrix.length; i++) {
+      for (let j = 0; j < matrix[i].length; j++) {
+        const cellName = matrix[i][j];
+        if (!cellName) continue;
+        IID[cellName] = [width, height, (j * width) / s_def.columns, (i * height) / s_def.rows,
+          width / (s_def.columns * col_num), height / (s_def.rows * row_num), col_num, s_def.file, s_type];
+        SPR_T[cellName] = s_def.type || "full";
+        SPR_SIZE[cellName] = s_def.size || "normal"; // SS[name] in the real client - per-cell size class, used for head_dy below
+      }
+    }
+  }
+}
+
+// cxtype_to_slot (js/old_common_functions.js:135-152) - classifies a cosmetic id's sprite `type` into
+// the place-keyed slot sprite()/prune_cx expect. Real live data (captured this session from the
+// official /player/<name> page's own data-cx attributes, e.g. {"hair":"hairdo206","hat":"hat404"})
+// confirmed character.cx is normally ALREADY a place-keyed object exactly like this - the
+// data-character.md doc's array example (cx: ["santahat"]) was a possibly-simplified single-item case,
+// not the general shape. Both are handled: an object is used directly (just validated), an array goes
+// through the id->place classification below (kept as a fallback for whichever shape that doc example
+// represents, or any future/legacy data that really is array-shaped).
+const CX_TYPE_TO_SLOT = { armor: "skin", body: "skin", character: "skin", face: "face", makeup: "makeup",
+  a_makeup: "makeup", beard: "chin", mask: "chin", tail: "tail", s_wings: "back", wings: "back",
+  hat: "hat", a_hat: "hat", head: "head", hair: "hair", gravestone: "gravestone" };
+function cxArrayToPlaces(cxInput) {
+  const cx = {};
+  if (!cxInput) return cx;
+  if (Array.isArray(cxInput)) {
+    for (const cid of cxInput) {
+      const place = CX_TYPE_TO_SLOT[SPR_T[cid]];
+      if (place && place !== "skin") cx[place] = cid; // "skin" here means "this IS a base body/armor skin
+      // choice, not an accessory layer" - none of this account's characters swap their base armor-skin
+      // cosmetic independently of gear today, and sprite()'s own `name` argument already covers the base
+      // layer, so a "skin"-typed cx entry is intentionally not placed into the accessory stack.
+    }
+  } else if (typeof cxInput === "object") {
+    // Already place-keyed (the real, confirmed common case) - just pass through entries that resolve
+    // to a real sprite cell, so an unrecognized/stale cosmetic id can't produce a broken <img>.
+    for (const place of Object.keys(cxInput)) {
+      if (IID[cxInput[place]]) cx[place] = cxInput[place];
+    }
+  }
+  return cx;
+}
+
+// sprite_image (js/html.js:7531-7586), direct port: same margin-left/margin-top/width/height crop
+// formula as itemIconHtml above, but for a character/cosmetic layer instead of an item icon. The
+// desktop.imageUrl(...) branch is removed (browser-only dashboard) and the src is made absolute.
+function spriteImageHtml(name, args) {
+  if (!IID[name]) name = "naked";
+  if (!IID[name]) return "";
+  args = args || {};
+  const scale = args.scale || 1, j = args.j || 0, p = args.p || 0, rheight = args.rheight || 0;
+  let width = IID[name][4], height = IID[name][5], w_disp = 0, l_disp = 0;
+  // Some cosmetic ids need a custom box size instead of the sheet's generic per-cell size (e.g. a
+  // hairstyle wider/taller than a body frame) - G.dimensions overrides width/height for those specific
+  // ids. Missing this was a real gap in the initial port: without it, the wrapper div below (which
+  // clips to width x height via overflow:hidden) can be too small for a hair/hat sprite that needs
+  // more room, silently cropping most of it away.
+  const dims = window.G && window.G.dimensions && window.G.dimensions[name];
+  if (dims) { width = dims[0]; height = dims[1]; }
+  if (IID[name][6] === 1) w_disp = width;
+  if (args.cwidth) l_disp = (args.cwidth - width * scale) / 2;
+  l_disp += (args.x || 0) * scale;
+  const opacityCss = args.opacity && args.opacity !== 1 ? "opacity:" + args.opacity + ";" : "";
+  const mx = (-IID[name][2] - IID[name][4] + w_disp - (IID[name][4] - width + (args.x_disp || 0)) / 2) * scale;
+  const my = (-IID[name][3] - IID[name][5] - IID[name][5] * j + height) * scale;
+  return '<div style="display:inline-block;width:' + width * scale + 'px;height:' + (height - rheight) * scale +
+    'px;overflow:hidden;position:absolute;left:' + l_disp + 'px;bottom:' + (p + rheight) * scale + 'px;' + opacityCss + '">' +
+    '<img style="margin-left:' + mx + 'px;margin-top:' + my + 'px;width:' + IID[name][0] * scale + 'px;height:' + IID[name][1] * scale + 'px" ' +
+    'src="' + GAME_ART_ORIGIN + IID[name][7] + '"></div>';
+}
+
+// sprite (js/html.js:7588-7710), direct port of the layer stack/z-order and the head/hair/hat offset
+// math. Omissions (both explicit, safe no-ops for a live player portrait, not silent gaps): the
+// rip/gravestone branch (the dashboard never shows a dead-forever state) and G.monsters[name] size
+// adjustment (not applicable to player characters - name is always a character skin here).
+function spriteHtml(skinName, cxArray, args) {
+  if (!gameArtReady || !window.G || !skinName || !IID[skinName]) return null;
+  const G = window.G;
+  args = args || {};
+  const scale = args.scale || 1.5, j = args.j || 0;
+  const width = args.width || 40, height = args.height || 50;
+  const cx = cxArrayToPlaces(cxArray);
+  let html = '<div style="height:' + height + 'px;width:' + width + 'px;position:relative;text-align:center;overflow:hidden;display:inline-block">';
+  const cosmetics = G.cosmetics || {};
+  const cosmetic_head_y = (cosmetics.head_y && cosmetics.head_y[skinName]) || 0;
+  let head_y = (cosmetics.default_head_place || 0) - cosmetic_head_y;
+  let hair_y = (cosmetics.default_hair_place || 0) - cosmetic_head_y;
+  let hat_y = (cosmetics.default_hat_place || 0) - cosmetic_head_y;
+  let body_type = "full";
+  if (SPR_T[skinName] === "armor") body_type = "armor";
+  else if (SPR_T[skinName] === "body") body_type = "body";
+  else if (SPR_T[skinName] === "character") body_type = "character";
+  if (body_type !== "full" && !cx.head) cx.head = "makeup117";
+  if (body_type !== "character" && !cx.head) cx.head = "makeup117";
+  const head_dy = { large: 2, tall: 1, normal: 0, small: -1, xsmall: -3, xxsmall: -4 }[SPR_SIZE[skinName] || "normal"] || 0;
+  head_y += head_dy;
+  const head_dh = (cosmetics.head && cosmetics.head[cx.head] && cosmetics.head[cx.head][3]) || 0;
+  let hair_dy = (cosmetics.hair && cosmetics.hair[cx.hair] && cosmetics.hair[cx.hair][0]) || 0;
+  hair_dy += head_dh + head_dy;
+  hair_y += hair_dy;
+  const hair_dh = (cosmetics.hair && cosmetics.hair[cx.hair] && cosmetics.hair[cx.hair][1]) || 0;
+  hat_y += hair_dh + head_dy;
+  let hat_dy = (cosmetics.hat && cosmetics.hat[cx.hat]) || 0;
+  hat_dy += head_dh;
+  hat_y += hat_dy;
+  const cx_prop = {};
+  [skinName].concat(Object.values(cx)).forEach((cid) => {
+    if (cosmetics.prop && cosmetics.prop[cid]) cosmetics.prop[cid].forEach((p) => { cx_prop[p] = true; });
+  });
+  const hidden_head = j === 3 || (cosmetics.prop && cosmetics.prop[skinName] && cosmetics.prop[skinName].includes("covers"));
+  // For an "armor"-type base skin (no head of its own baked into the sprite), a bare head/neck patch
+  // has to be drawn separately underneath the body so there's no gap where a head accessory sits -
+  // this was missing from the initial port (found while investigating the hair/hat stacking report).
+  let skinPatch = null;
+  if (cx.head && body_type === "armor") {
+    const headCfg = cosmetics.head && cosmetics.head[cx.head];
+    skinPatch = { small: (headCfg && headCfg[0]) || "sskin1a", normal: (headCfg && headCfg[1]) || "mskin1a",
+      tall: (headCfg && headCfg[1]) || "mskin1a", large: (headCfg && headCfg[2]) || "lskin1a" }[SPR_SIZE[skinName] || "normal"];
+    if (!IID[skinPatch]) skinPatch = null; // don't draw an id that isn't a real sprite cell
+  }
+  const x_disp = IID[skinName][4] % 2 ? 0 : -0.5;
+  let back_x = x_disp;
+  if (cx.back && SPR_T[cx.back] === "s_wings") {
+    let back_dx = cosmetics.back && cosmetics.back[cx.back];
+    if (back_dx === undefined) back_dx = 3;
+    back_x += j === 1 ? back_dx : j === 2 ? -back_dx : 0;
+  } else if (cx.back && SPR_T[cx.back] === "wings") back_x += [-2.5, 5, -9, -5][j];
+  const common = { cwidth: width, scale: scale, j: j };
+  if (cx.head && hidden_head) html += spriteImageHtml(cx.head, Object.assign({ x: x_disp, p: head_y }, common));
+  if (cx.back && j !== 3) html += spriteImageHtml(cx.back, Object.assign({ x: back_x }, common));
+  if (skinPatch) html += spriteImageHtml(skinPatch, Object.assign({}, common));
+  html += spriteImageHtml(skinName, Object.assign({ x_disp: IID[skinName][4] % 2 ? 0 : -0.5 }, common));
+  if (cx.upper) html += spriteImageHtml(cx.upper, Object.assign({ rheight: 8 }, common));
+  if (cx.head && !hidden_head) html += spriteImageHtml(cx.head, Object.assign({ x: x_disp, p: head_y }, common));
+  if (cx.hair) html += spriteImageHtml(cx.hair, Object.assign({ x: x_disp, p: hair_y }, common));
+  if (cx.face) html += spriteImageHtml(cx.face, Object.assign({ x: x_disp, p: head_y + (cosmetics.default_face_position || 0) }, common));
+  if (cx.chin) html += spriteImageHtml(cx.chin, Object.assign({ x: x_disp, p: head_y + (cosmetics.default_beard_position || 0) }, common));
+  if (cx.tail) html += spriteImageHtml(cx.tail, Object.assign({ p: 0 }, common));
+  if (cx.hat && !cx_prop.no_hat) html += spriteImageHtml(cx.hat, Object.assign({ x: x_disp, p: hat_y }, common));
+  if (cx.makeup) html += spriteImageHtml(cx.makeup, Object.assign({ x: x_disp, p: head_y + (cosmetics.default_makeup_position || 0) }, common));
+  if (cx.back && j === 3) html += spriteImageHtml(cx.back, Object.assign({ x: back_x }, common));
+  html += "</div>";
+  return html;
+}
+
+// Collapsible sections: the dashboard rebuilds #main's whole innerHTML on every periodic refresh (5s
+// live, or a manual range change), which would otherwise silently re-open every section a user just
+// collapsed. detailsOpen remembers each section's last toggle state (by a stable id) across rebuilds -
+// captured from the live DOM at the start of every render() call, restored into the freshly-built HTML
+// string via detailsOpenAttr/collapsible. A section never seen before falls back to its own default.
+let detailsOpen = {};
+function detailsOpenAttr(id, defaultOpen) {
+  const isOpen = id in detailsOpen ? detailsOpen[id] : defaultOpen !== false;
+  return isOpen ? " open" : "";
+}
+// Rewrites an existing '<section><h2>Title</h2>...body...</section>' string (the shape every renderXxx
+// function already returns) into a collapsible <details>/<summary>, open/closed per detailsOpenAttr.
+// Lets each renderer keep returning a plain <section> - only render() decides which ones collapse.
+function collapsible(sectionHtml, id, defaultOpen) {
+  if (!sectionHtml) return "";
+  return sectionHtml
+    .replace(/^<section>/, '<details class="collapsible" id="' + id + '"' + detailsOpenAttr(id, defaultOpen) + '>')
+    .replace(/<h2>/, "<summary>").replace(/<\/h2>/, "</summary>")
+    .replace(/<\/section>$/, "</details>");
 }
 
 function endTime() {
@@ -252,6 +501,34 @@ function auraLetters(name) {
 }
 function ccColor(p) { return p >= 75 ? "#e5534b" : p >= 50 ? "#e3b341" : "#57ab5a"; }
 
+// Gear-up spend/progress frame - moved out of the live character cards into the Gear & stats section
+// (see renderGearSheetInner) since it's supplemental to a specific character's gear/stats, not part of
+// the always-visible "how's my farm doing" live status.
+function gearupFrameHtml(r) {
+  const gu = r && r.gu;
+  if (!gu) return "";
+  const guP = gu.cap ? Math.min(100, Math.round(100 * gu.spend / gu.cap)) : 0;
+  // "next headroom" is the oldest still-counted ledger entry aging out of the rolling hour - the
+  // first (and usually most informative) moment spend capacity starts opening back up, though later
+  // entries may still keep it blocked if the blocked cost is larger than what that one entry frees.
+  const guNextOpen = gu.oldest ? Math.max(0, gu.oldest + 3600000 - Date.now()) : null;
+  // One climb's cost breakdown as a readable line: how many items/scrolls/attempts/gold it took to
+  // reach this +9 (or how much has gone in so far, for the still-in-progress one).
+  const climbLine = (c) => esc(c.item) + ": " + (c.items || 0) + " item(s), " +
+    (Object.entries(c.scrolls || {}).map(([n, q]) => q + "x " + esc(n)).join(" + ") || "0 scrolls") + ", " +
+    (c.attempts || 0) + " attempts, " + num(c.gold || 0) + " gold";
+  const guHistory = gu.history && gu.history.length
+    ? '<div class="gumeta" style="margin-top:5px">' + gu.history.slice().reverse().map(climbLine).join("<br>") + '</div>' : "";
+  const guClimb = gu.climb ? '<div class="gumeta">In progress - ' + climbLine(gu.climb) + '</div>' : "";
+  return '<div class="gustatus">' +
+    '<div class="guhead"><span>Gear-up (' + esc(r.n) + '): <b>' + esc(gu.item || "idle") + '</b> (' + (gu.banked || 0) + '/' + (gu.need || 0) + ')</span>' +
+    '<span>' + (gu.blocked ? "capped, waiting" : "active") + '</span></div>' +
+    ebar("thin", guP, ccColor(guP), "Spend/hr", num(gu.spend) + " / " + num(gu.cap)) +
+    '<div class="gumeta">' + (gu.blocked ? "Blocked on " + num(gu.blocked) + " gold" : "No block") +
+    (guNextOpen != null ? " · next headroom in " + fmtDur(guNextOpen / 1000) : "") + '</div>' +
+    guClimb + guHistory + '</div>';
+}
+
 function renderNow() {
   const rows = (DATA.now || []).slice().sort((a, b) => (CLASS_ORDER.indexOf(a.c) - CLASS_ORDER.indexOf(b.c)) || a.n.localeCompare(b.n));
   if (!rows.length) return "";
@@ -267,11 +544,15 @@ function renderNow() {
       .sort((a, b) => b[1] - a[1]).slice(0, 8)
       .map(([k, sec]) => '<div class="aura" style="--ac:' + auraColor(k) + '" title="' + esc(k.replace(/_/g, " ")) + '"><div class="ai">' + esc(auraLetters(k)) + '</div><div class="at">' + fmtDur(sec) + '</div></div>').join("");
     const letter = merch ? "$" : esc((r.c || "?").charAt(0).toUpperCase());
+    // Real composited portrait when game art has loaded and this character reported a skin; falls
+    // back to the plain class-letter tile otherwise (offline, data.js not yet loaded, or no skin
+    // reported yet) - never a hard failure either way.
+    const portrait = spriteHtml(r.skin, r.cx, { width: 56, height: 56, scale: 2 });
     const pct = (v) => (v == null || !isFinite(v) ? "—" : Math.round(v) + "%");
     return '<div class="ccard" style="--cc:' + col + '">' +
       '<div class="ehead"><span class="dot" style="background:' + (fresh ? "#69db7c" : "#5c6377") + '"></span><span class="tag">' + esc(r.sv || "server") + '</span>' +
       '<span>' + (r.su ? "up " + fmtDur((Date.now() - r.su) / 1000) : "") + '</span><span class="sp">' + esc(r.m) + (r.x != null ? " (" + r.x + ", " + r.y + ")" : "") + '</span></div>' +
-      '<div class="eframe"><div class="eport">' + letter + '</div><div class="ebars">' +
+      '<div class="eframe"><div class="eport">' + (portrait || letter) + '</div><div class="ebars">' +
       ebar("hp", hpP, col, esc(r.lv) + " " + esc(r.n), num(r.hp) + " | " + pct(hpP)) +
       ebar("mp", mpP, "#4f7fd1", "MP", num(r.mp) + " | " + pct(mpP)) +
       (merch ? "" : ebar("thin", xpP, "#8b5cf6", "XP", num(r.xp) + " / " + num(r.mx) + " | " + pct(xpP))) +
@@ -300,17 +581,25 @@ const STAT_ROWS = [["str", "STR"], ["int", "INT"], ["dex", "DEX"], ["vit", "VIT"
 
 // A single pane of glass for gear/stat comparisons: what each character has equipped right now, and
 // its full stat sheet, so upgrade targets (a missing slot, a low stat relative to a teammate) jump out.
-function renderGearSheet() {
+// Returns just the inner body (no outer <section>/<details> wrapper) - render() wraps this as a
+// collapsible "Gear & stats" section and refreshes only this inner content every 1s via #gearbox,
+// leaving the outer <details> (and its open/closed state) untouched by that faster refresh cycle.
+// Also carries the gear-up spend/progress frame (moved here from the live character cards, since it's
+// supplemental detail about SuperSellin specifically, not part of the always-visible farm-status view).
+function renderGearSheetInner() {
   const rows = (DATA.now || []).slice().sort((a, b) => (CLASS_ORDER.indexOf(a.c) - CLASS_ORDER.indexOf(b.c)) || a.n.localeCompare(b.n));
   if (!rows.length) return "";
+  const guRow = rows.find((r) => r.gu);
+  const guFrame = guRow ? gearupFrameHtml(guRow) : "";
   const cards = rows.map((r) => {
     const col = CLASS_COLORS[r.c] || colorOf[r.n] || "#8b93a7";
     const eq = r.eq || {}, st = r.st || {};
     const gearRows = EQUIP_SLOT_ORDER.map((slot) => {
       const it = eq[slot];
       const label = it ? esc(it.n) + (it.l ? " +" + it.l : "") + (it.s ? " (" + esc(it.s) + ")" : "") : "—";
+      const icon = it ? itemIconHtml(it.n, 22) : null;
       return '<tr><td class="gslot">' + EQUIP_SLOT_LABELS[slot] + '</td><td class="gitem"' +
-        (it ? "" : ' style="color:var(--dim)"') + '>' + label + '</td></tr>';
+        (it ? "" : ' style="color:var(--dim)"') + '>' + (icon || "") + label + '</td></tr>';
     }).join("");
     const statCells = STAT_ROWS.filter(([k]) => st[k] != null).map(([k, label]) =>
       statCell(label, "#8b93a7", num(st[k], 1))).join("");
@@ -319,8 +608,8 @@ function renderGearSheet() {
       '<div class="gbody"><table class="gear">' + gearRows + '</table>' +
       '<div class="cstats gstats">' + (statCells || '<div class="empty">No stats reported yet</div>') + '</div></div></div>';
   }).join("");
-  return '<section><h2>Gear &amp; stats</h2><div class="gcards">' + cards + '</div>' +
-    '<div class="note">Equipment and stat sheet as last reported live; a dash means that slot is empty. Compare across characters to spot a missing accessory or a stat lagging a teammate\'s.</div></section>';
+  return guFrame + '<div class="gcards">' + cards + '</div>' +
+    '<div class="note">Equipment and stat sheet as last reported live; a dash means that slot is empty. Compare across characters to spot a missing accessory or a stat lagging a teammate\'s.</div>';
 }
 
 function topSource(m) {
@@ -360,19 +649,6 @@ function renderRulesWatch(A) {
     '<div class="note">Each character is disconnected if its call cost passes 200. Red means the CODE is sending too many server requests: slow the loop that is spamming.</div></section>';
 }
 
-function eventText(e) {
-  if (e.e === "death") return "died" + (e.by ? " to " + esc(e.by) : "") + (e.m ? " on " + esc(e.m) + (e.x != null ? " (" + e.x + ", " + e.y + ")" : "") : "");
-  if (e.e === "loot") return "chest: " + (e.g ? num(e.g) + " gold" : "") + (e.g && e.items && e.items.length ? ", " : "") + esc((e.items || []).join(", "));
-  if (e.e === "lvl") return "reached level " + esc(e.lv);
-  return esc(e.e);
-}
-function renderFeed() {
-  const evs = (DATA.events || []).slice(-25).reverse();
-  if (!evs.length) return "";
-  const rows = evs.map((e) => '<tr><td style="text-align:left">' + new Date(e.t).toLocaleTimeString() + '</td><td style="text-align:left"><span class="dot" style="background:' + (colorOf[e.n] || "#8b93a7") + '"></span>' + esc(e.n) +
-    '</td><td style="text-align:left;' + (e.e === "death" ? "color:#ff8787" : "") + '">' + eventText(e) + '</td></tr>').join("");
-  return '<section><h2>Event log (deaths, chests, level-ups)</h2><div class="scroll"><table><tr><th style="text-align:left">Time</th><th style="text-align:left">Character</th><th style="text-align:left">Event</th></tr>' + rows + '</table></div></section>';
-}
 
 function renderCharTable(A) {
   const rows = DATA.chars.map((ch) => {
@@ -426,10 +702,18 @@ function renderSales() {
     : '<div class="empty">No sales in this range.</div>') + '</section>';
 }
 
+// Top N looted items by count, as {label, value, color} bars - shared between renderDrops (the
+// section shell + note text) and render()'s post-innerHTML drawBarChart call (the canvas needs to
+// exist in the DOM first, so the actual draw happens after renderDrops's HTML is inserted).
+function dropBars(A, n) {
+  return Object.entries(A.drops).sort((a, b) => b[1] - a[1]).slice(0, n)
+    .map(([k, v], i) => ({ label: k, value: v, color: COLORS[i % COLORS.length] }));
+}
 function renderDrops(A) {
-  const rows = Object.entries(A.drops).sort((a, b) => b[1] - a[1]).map(([k, n]) => '<tr><td>' + esc(k) + '</td><td>' + n + '</td><td>' + num(rate(n, A.farmHours), 2) + '</td></tr>').join("");
-  return '<section><h2>Drops looted by characters</h2>' + (rows
-    ? '<table><tr><th>Item</th><th>Count</th><th>Per farming hour</th></tr>' + rows + '</table>'
+  const bars = dropBars(A, 15);
+  const total = Object.values(A.drops).reduce((a, n) => a + n, 0);
+  return '<section><h2>Drops looted by characters</h2>' + (bars.length
+    ? '<canvas id="cdrops" class="bar-chart"></canvas><div class="note">Top ' + bars.length + ' items by count. ' + num(rate(total, A.farmHours), 2) + ' total drops / farming hour.</div>'
     : '<div class="empty">No drops recorded in this range.</div>') + '</section>';
 }
 
@@ -442,7 +726,7 @@ function renderUpgradeSlots() {
   const slots = DATA.upgradeSlots || [];
   const totalN = slots.reduce((a, s) => a + s.n, 0);
   if (!totalN) {
-    return '<section><h2>SuperSellin: lucky upgrade slot</h2><div class="empty">No upgrade attempts logged yet. Upgrade items (with a scroll) while SuperSellin\'s CODE is running and this fills in.</div></section>';
+    return '<details class="collapsible" id="sec-lucky"' + detailsOpenAttr("sec-lucky", false) + '><summary>SuperSellin: lucky upgrade slot</summary><div class="empty">No upgrade attempts logged yet. Upgrade items (with a scroll) while SuperSellin\'s CODE is running and this fills in.</div></details>';
   }
   // Two independent signals, same as the community "Lucky Slot Tracker" (by Crown, a game dev) plus
   // ours: (1) win-rate vs the shown chance, which needs more attempts but works for any item/level;
@@ -480,10 +764,47 @@ function renderUpgradeSlots() {
     ? 'Decoded roll: slot <b>#' + rollBest.slot + '</b> leads with <b>' + rollBest.zero + '</b> rolls at 00.00 vs ' + rollBest.high + ' above 96.3, out of ' + rollBest.rolls + ' decoded.'
     : 'Decoded roll: not available (needs parent.socket, or no rolls decoded yet).');
   parts.push('The real effect (confirmed in the game\'s own server code) is small, around 102-105% on the win rate, so treat either signal as a lead worth another 50-100 attempts, not proof - more so if both agree on the same slot.');
-  return '<section><h2>SuperSellin: lucky upgrade slot</h2>' +
+  // Collapsed by default (no "open" attribute) - once a slot is settled, this is reference material,
+  // not something to look at every visit. The summary line still shows the current leading slot so a
+  // glance at the closed panel is enough without expanding it.
+  const summaryLine = 'SuperSellin: lucky upgrade slot' + (best ? ' — #' + best.slot + ' (' + best.relative.toFixed(0) + '%)' : '');
+  return '<details class="collapsible" id="sec-lucky"' + detailsOpenAttr("sec-lucky", false) + '><summary>' + esc(summaryLine) + '</summary>' +
     '<div class="lucky-summary">' + parts.join(" ") + '</div>' +
     '<div class="lucky-grid">' + cells + '</div>' +
-    '<div class="note">Each tile is one inventory slot (0-41), the same slots the game permanently assigns one hidden lucky slot to at character creation. % = actual successes / sum of shown chance, scroll-based upgrades only (compounding and offering-only rerolls never get the bonus, so they are excluded here). Gold border = win-rate candidate (n >= ' + LUCKY_SLOT_MIN_N + '); blue border = roll-decode candidate (Crown\'s method: most 00.00 rolls, ties broken by fewest >96.3 rolls).</div></section>';
+    '<div class="note">Each tile is one inventory slot (0-41), the same slots the game permanently assigns one hidden lucky slot to at character creation. % = actual successes / sum of shown chance, scroll-based upgrades only (compounding and offering-only rerolls never get the bonus, so they are excluded here). Gold border = win-rate candidate (n >= ' + LUCKY_SLOT_MIN_N + '); blue border = roll-decode candidate (Crown\'s method: most 00.00 rolls, ties broken by fewest >96.3 rolls).</div></details>';
+}
+
+// Bank pack tabs. DATA.bank is {packName: {slots: [...42 entries, item-or-null...], t: snapshotMs}} -
+// only refreshes when SuperSellin actually visits the bank (see Telemetry.js's telemetrySnapshotBank,
+// called from the existing gear-up deposit and exchange-overflow bank trips - no new travel added),
+// so a pack can be stale between visits; the note under the grid says how stale. Reuses the
+// .lucky-grid/.lucky-slot 42-tile CSS from the lucky-slot panel - text-only tiles (item name + level,
+// qty in a corner), no game art, matching that panel's own precedent.
+let bankTab = null;
+// Returns just the inner body (tabs + grid + note, no outer <section>/<details>) - render() wraps this
+// as a collapsible "Bank" section; wireBankTabs() re-renders only this inner content on a tab click,
+// leaving the outer <details> (and its open/closed state) untouched.
+function renderBankInner() {
+  const packs = DATA.bank || {};
+  const names = Object.keys(packs).sort();
+  if (!names.length) return '<div class="empty">No bank snapshot yet - one is captured automatically the next time SuperSellin visits the bank (a gear-up deposit or an exchange-overflow trip).</div>';
+  if (!bankTab || names.indexOf(bankTab) === -1) bankTab = names[0];
+  const tabs = names.map((n) => '<button class="btn' + (n === bankTab ? " on" : "") + '" data-bank="' + esc(n) + '">' + esc(n) + '</button>').join(" ");
+  const pack = packs[bankTab] || { slots: [], t: 0 };
+  const slots = pack.slots || [];
+  const cells = Array.from({ length: 42 }, (_, i) => {
+    const it = slots[i];
+    if (!it || !it.n) return '<div class="lucky-slot"><div class="ls-num">#' + i + '</div></div>';
+    const full = esc(it.n) + (it.l ? " +" + it.l : "") + (it.q > 1 ? " ×" + it.q : "");
+    const icon = itemIconHtml(it.n, 26);
+    const label = it.n.length > 9 ? it.n.slice(0, 8) + "…" : it.n;
+    return '<div class="lucky-slot" title="' + full + '"><div class="ls-num">#' + i + '</div>' +
+      (icon || '<div class="ls-roll" style="color:#e6e8ee;font-size:11px">' + esc(label) + (it.l ? " +" + it.l : "") + '</div>') +
+      (it.q > 1 ? '<div class="ls-n">×' + it.q + '</div>' : '') + '</div>';
+  }).join("");
+  return '<div class="legend" style="margin-bottom:8px">' + tabs + '</div>' +
+    '<div class="lucky-grid">' + cells + '</div>' +
+    '<div class="note">Pack "' + esc(bankTab) + '" as of ' + (pack.t ? ago(pack.t) : "never") + '. Only refreshes on an actual bank visit, so this can lag what\'s really there between visits.</div>';
 }
 
 /* ---------- charts ---------- */
@@ -493,7 +814,7 @@ function smooth(pts, n) {
 function seriesPerChar(bs, fn, names, sm) {
   return names.map((name) => ({ name, color: colorOf[name], pts: smooth(bs.filter((b) => b.c[name]).map((b) => ({ t: b.t, v: fn(b.c[name]) })).filter((p) => p.v != null), sm) }));
 }
-function drawChart(id, series, fmt) {
+function drawChart(id, series, fmt, domain) {
   const cv = document.getElementById(id); if (!cv) return;
   const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
   cv.width = w * dpr; cv.height = h * dpr;
@@ -501,7 +822,13 @@ function drawChart(id, series, fmt) {
   const pad = { l: 56, r: 10, t: 10, b: 22 };
   const all = series.flatMap((s) => s.pts);
   if (!all.length) { ctx.fillStyle = "#8b93a7"; ctx.font = "13px system-ui"; ctx.fillText("no data in range", pad.l, h / 2); cv._c = null; return; }
-  const tmin = Math.min(...all.map((p) => p.t)), tmax = Math.max(...all.map((p) => p.t), tmin + 1);
+  // A shared domain (same tmin/tmax across every chart on the page) keeps every chart's x-axis
+  // pixel-for-pixel aligned, so a spike lines up at the same horizontal position on every chart even
+  // when one series has fewer points than another (e.g. DPS is null during low-uptime buckets) -
+  // without this, each chart independently fit its own x-axis to just its own points and charts could
+  // drift out of alignment with each other, making visual correlation (e.g. ping vs. DPS) unreliable.
+  const tmin = domain ? domain.tmin : Math.min(...all.map((p) => p.t));
+  const tmax = domain ? domain.tmax : Math.max(...all.map((p) => p.t), tmin + 1);
   let ymin = Math.min(0, ...all.map((p) => p.v)), ymax = Math.max(...all.map((p) => p.v), 1e-9) * 1.08;
   if (ymax === ymin) ymax = ymin + 1;
   const X = (t) => pad.l + (t - tmin) / (tmax - tmin) * (w - pad.l - pad.r);
@@ -523,6 +850,50 @@ function drawChart(id, series, fmt) {
 }
 function legend(series) { return '<div class="legend">' + series.map((s) => '<span><span class="dot" style="background:' + s.color + '"></span>' + esc(s.name) + '</span>').join("") + '</div>'; }
 function chartBox(id, title, series) { return '<section><h2>' + esc(title) + '</h2>' + legend(series) + '<canvas id="' + id + '"></canvas></section>'; }
+
+// Ranked horizontal bar chart (top loot items) - a separate renderer from drawChart's time-series
+// line chart, since this is a one-shot ranking over the whole range, not a value-over-time series.
+// Row height is fixed and canvas height grows with the bar count, unlike the fixed 230px line charts.
+function drawBarChart(id, bars, fmt) {
+  const cv = document.getElementById(id); if (!cv) return;
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth;
+  const rowH = 22, pad = { l: 130, r: 54, t: 6, b: 6 };
+  const h = Math.max(60, bars.length * rowH + pad.t + pad.b);
+  cv.style.height = h + "px";
+  cv.width = w * dpr; cv.height = h * dpr;
+  const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr); ctx.clearRect(0, 0, w, h);
+  if (!bars.length) { ctx.fillStyle = "#8b93a7"; ctx.font = "13px system-ui"; ctx.fillText("no data in range", pad.l, h / 2); return; }
+  const max = Math.max(...bars.map((b) => b.value), 1e-9);
+  const barW = Math.max(10, w - pad.l - pad.r);
+  bars.forEach((b, i) => {
+    const y = pad.t + i * rowH, bw = Math.max(1, (b.value / max) * barW);
+    ctx.font = "12px system-ui"; ctx.textBaseline = "middle";
+    ctx.fillStyle = "#9a9a9a"; ctx.textAlign = "right";
+    const label = b.label.length > 22 ? b.label.slice(0, 21) + "…" : b.label;
+    ctx.fillText(label, pad.l - 8, y + rowH / 2);
+    ctx.fillStyle = "#1c1c1c"; ctx.fillRect(pad.l, y + 3, barW, rowH - 8);
+    ctx.fillStyle = b.color || "#4dabf7"; ctx.fillRect(pad.l, y + 3, bw, rowH - 8);
+    ctx.fillStyle = "#e6e8ee"; ctx.textAlign = "left"; ctx.fillText(fmt(b.value), pad.l + bw + 6, y + rowH / 2);
+  });
+}
+
+// Top-N monster types by total kills across the visible range, as one line series per type over the
+// same buckets/time-axis as every other chart (so it lines up with the shared `domain`). `km` is
+// already summed cross-character per bucket by the aggregation below - same source data A.km reads,
+// just kept per-bucket instead of collapsed into one range-wide total.
+function seriesPerMobType(bs, topN, sm) {
+  const totals = {};
+  for (const b of bs) for (const c of Object.values(b.c)) for (const [mt, v] of Object.entries(c.km || {})) totals[mt] = (totals[mt] || 0) + v;
+  const top = Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, topN).map(([mt]) => mt);
+  return top.map((mt, i) => ({
+    name: mt, color: COLORS[i % COLORS.length],
+    pts: smooth(bs.map((b) => {
+      let v = 0;
+      for (const c of Object.values(b.c)) v += (c.km || {})[mt] || 0;
+      return { t: b.t, v };
+    }), sm)
+  }));
+}
 
 function attachTips() {
   const tip = $("#tip");
@@ -559,20 +930,25 @@ function announceSales() {
 }
 
 function render() {
+  // Capture which collapsible sections are currently open/closed BEFORE #main gets rebuilt below -
+  // otherwise every periodic refresh (5s live, or a range change) would silently re-open everything a
+  // user just collapsed. See the collapsible()/detailsOpenAttr() comment for the full mechanism.
+  document.querySelectorAll("#main details.collapsible[id]").forEach((d) => { detailsOpen[d.id] = d.open; });
   prep();
-  $("#title").textContent = DATA.title || "Farm Dashboard";
+  $("#title").textContent = DATA.title || "Derstn's AdventureLand Status";
   $("#ranges").innerHTML = Object.keys(RANGES).map((k) => '<button class="btn' + (k === range ? " on" : "") + '" data-r="' + k + '">' + k + "</button>").join(" ");
   document.querySelectorAll("[data-r]").forEach((b) => (b.onclick = () => { range = b.dataset.r; try { localStorage.setItem(FEED ? "al_range_live" : "al_range", range); } catch (e) {} refresh(); }));
   if (FEED) {
     const pill = $("#pill"); pill.style.display = ""; pill.className = "pill" + (Date.now() - lastFetchOk < 15000 ? " on" : "");
     pill.textContent = Date.now() - lastFetchOk < 15000 ? "LIVE" : "DISCONNECTED";
-    $("#autoLabel").style.display = "none";
   }
-  $("#meta").textContent = DATA.buckets.length || (DATA.now || []).length ? "data through " + fmtTime(endTime()) + " · built " + fmtTime(DATA.generated) : "";
-  const nowHtml = '<div id="nowbox">' + renderNow() + '</div>', feedHtml = '<div id="feedbox">' + renderFeed() + '</div>',
-    gearHtml = '<div id="gearbox">' + renderGearSheet() + '</div>';
+  // Always visible, never collapsible: live character status and the per-hour "how's my farm doing"
+  // summary cards. Gear & stats (with the gear-up frame folded in) comes right after - collapsible,
+  // but positioned prominently since it's still core info, not supplemental.
+  const nowHtml = '<div id="nowbox">' + renderNow() + '</div>';
+  const gearHtml = '<details class="collapsible" id="sec-gear"' + detailsOpenAttr("sec-gear", true) + '><summary>Gear &amp; stats</summary><div id="gearbox">' + renderGearSheetInner() + '</div></details>';
   if (!DATA.buckets.length) {
-    $("#main").innerHTML = nowHtml + gearHtml + feedHtml + '<div class="empty">No in-game telemetry in this range yet (DPS, kills, sales, farm comparison). ' + (FEED
+    $("#main").innerHTML = nowHtml + gearHtml + '<div class="empty">No in-game telemetry in this range yet (DPS, kills, sales, farm comparison). ' + (FEED
       ? 'Waiting for pushes: sync the LiveConfig slot, then restart each character\'s CODE run.'
       : 'Run this tool with --serve while CODE is running, then run it again to build a static snapshot from the recorded data.') + '</div>';
     attachTips(); return;
@@ -582,24 +958,77 @@ function render() {
   const dpsS = seriesPerChar(bs, (c) => (c.up >= 20 ? c.dmg / c.up : null), combat, DATA.bucketMs <= 60000 ? 5 : 3);
   const kbS = seriesPerChar(bs, (c) => (c.up >= 20 ? c.kb / (c.up / 3600) : null), combat, DATA.bucketMs <= 60000 ? 5 : 3);
   const tkS = seriesPerChar(bs, (c) => (c.up >= 20 ? c.tk / c.up : null), combat, DATA.bucketMs <= 60000 ? 5 : 3);
-  let g = 0, s = 0;
-  const goldS = [{ name: "Account gold (cumulative, transfers excluded)", color: COLORS[2], pts: bs.map((b) => ({ t: b.t, v: (g += b.gold_net) })) },
+  // Per-character gold/hr (real income, excluding gold sent to/from own characters - same "ge" field
+  // the summary cards use), one line per combat character like xpS/dpsS/kbS/tkS above, so a dip or
+  // spike lines up on the shared x-axis against DPS/kills/etc for the same character at the same time.
+  const goldHrS = seriesPerChar(bs, (c) => (c.up >= 20 ? c.ge / (c.up / 3600) : null), combat, DATA.bucketMs <= 60000 ? 5 : 3);
+  // All characters (merchant included - it feels server latency same as anyone else), not just combat.
+  const pingS = seriesPerChar(bs, (c) => (c.pingN ? c.pingSum / c.pingN : null), KNOWN.map((k) => k.name), DATA.bucketMs <= 60000 ? 5 : 3);
+  let s = 0;
+  // Reconstruct the actual account gold BALANCE over time (a real wealth curve), not "how much has
+  // changed since I opened this chart" (the old metric): that cumulative-since-window-start sum reset
+  // to 0 on every range change and never told you the actual gold level, just a relative delta. There's
+  // no absolute gold stored per bucket (only per-bucket net deltas), so this anchors to the one known
+  // absolute value - the live total right now (DATA.now, the same figure "Total account gold" under the
+  // character cards uses) - and works BACKWARD through each bucket's gold_net delta to reconstruct the
+  // balance at every earlier point.
+  const liveTotalGold = (DATA.now || []).reduce((a, r) => a + (r.g || 0), 0);
+  const goldAbs = new Array(bs.length);
+  for (let i = bs.length - 1, running = liveTotalGold; i >= 0; i--) {
+    goldAbs[i] = running;
+    running -= bs[i].gold_net || 0;
+  }
+  const goldS = [{ name: "Total account gold", color: COLORS[2], pts: bs.map((b, i) => ({ t: b.t, v: goldAbs[i] })) },
                  { name: "Sales listed value (cumulative)", color: COLORS[1], pts: bs.map((b) => ({ t: b.t, v: (s += b.sales_v) })) }];
   const potS = [{ name: "Potions used / hr", color: COLORS[3], pts: smooth(bs.map((b) => ({ t: b.t, v: Object.values(b.c).reduce((a, c) => a + c.hp + c.mp, 0) / (DATA.bucketMs / 3.6e6) })), 3) }];
+  const killTypeS = seriesPerMobType(bs, 6, DATA.bucketMs <= 60000 ? 5 : 3);
+  // Shared across every chart below (see drawChart's `domain` param) so they all share one x-axis.
+  const domain = bs.length ? { tmin: bs[0].t, tmax: bs[bs.length - 1].t } : null;
 
-  $("#main").innerHTML = nowHtml + gearHtml + renderCards(A) + renderCharTable(A) +
-    '<div class="grid2">' + chartBox("c1", "XP per hour", xpS) + chartBox("c2", "Damage per second (uptime average)", dpsS) +
-    chartBox("c3", "Gold (cumulative over range)", goldS) + chartBox("c4", "Killing blows per hour", kbS) + chartBox("c5", "Potion use per hour", potS) + chartBox("c6", "Damage taken per second", tkS) + '</div>' +
-    renderSurvivability(A) + renderRulesWatch(A) + renderSegments(A) + renderSales() + renderUpgradeSlots() + renderDrops(A) + feedHtml;
-  drawChart("c1", xpS, num); drawChart("c2", dpsS, num); drawChart("c3", goldS, num); drawChart("c4", kbS, num); drawChart("c5", potS, num); drawChart("c6", tkS, num);
+  const chartsHtml = '<details class="collapsible" id="sec-charts"' + detailsOpenAttr("sec-charts", true) + '><summary>Performance charts</summary><div class="grid2">' +
+    chartBox("c1", "XP per hour", xpS) + chartBox("c2", "Damage per second (uptime average)", dpsS) +
+    chartBox("c3", "Total account gold over time", goldS) + chartBox("c4", "Killing blows per hour", kbS) + chartBox("c5", "Potion use per hour", potS) + chartBox("c6", "Damage taken per second", tkS) +
+    chartBox("c7", "Ping (ms, bucket average)", pingS) + chartBox("c8", "Kills by monster type", killTypeS) + chartBox("c9", "Gold per hour", goldHrS) + '</div></details>';
+  const bankHtml = '<details class="collapsible" id="sec-bank"' + detailsOpenAttr("sec-bank", true) + '><summary>Bank</summary><div id="bankbox">' + renderBankInner() + '</div></details>';
+  // Always-visible summary first (nowHtml, renderCards), then the sections the user specifically
+  // wanted prioritized (performance charts, drops, gear & stats, bank, sales), then everything less
+  // important (character table, survivability, rules watch, farm comparison, lucky-slot) pushed to the
+  // bottom. Per-section open/closed state persists across refreshes via detailsOpen (see collapsible()).
+  // The event log was removed entirely (not collapsed - the user said there's no need for it to be
+  // visible at all); death/level-up toasts still fire independently via announceEvents(), which reads
+  // DATA.events directly.
+  $("#main").innerHTML = nowHtml + renderCards(A) +
+    chartsHtml +
+    collapsible(renderDrops(A), "sec-drops", true) +
+    gearHtml +
+    bankHtml +
+    collapsible(renderSales(), "sec-sales", true) +
+    collapsible(renderCharTable(A), "sec-chartable", true) +
+    collapsible(renderSurvivability(A), "sec-survivability", true) +
+    collapsible(renderRulesWatch(A), "sec-rules", true) +
+    collapsible(renderSegments(A), "sec-segments", true) +
+    renderUpgradeSlots();
+  drawChart("c1", xpS, num, domain); drawChart("c2", dpsS, num, domain); drawChart("c3", goldS, num, domain); drawChart("c4", kbS, num, domain); drawChart("c5", potS, num, domain); drawChart("c6", tkS, num, domain);
+  drawChart("c7", pingS, num, domain); drawChart("c8", killTypeS, num, domain); drawChart("c9", goldHrS, num, domain);
+  drawBarChart("cdrops", dropBars(A, 15), num);
+  wireBankTabs();
   attachTips();
+}
+// Re-wires itself after each click, since switching tabs replaces #bankbox's innerHTML (and its
+// buttons) without a full render() - cheaper than re-running the whole aggregate/chart pipeline just
+// to flip which pack is shown.
+function wireBankTabs() {
+  document.querySelectorAll("[data-bank]").forEach((b) => (b.onclick = () => {
+    bankTab = b.dataset.bank;
+    $("#bankbox").innerHTML = renderBankInner();
+    wireBankTabs();
+  }));
 }
 
 function updateNow() {
-  const box = $("#nowbox"), feed = $("#feedbox"), gear = $("#gearbox");
+  const box = $("#nowbox"), gear = $("#gearbox");
   if (box) box.innerHTML = renderNow();
-  if (gear) gear.innerHTML = renderGearSheet();
-  if (feed) feed.innerHTML = renderFeed();
+  if (gear) gear.innerHTML = renderGearSheetInner();
   if (FEED) {
     const pill = $("#pill"), ok = Date.now() - lastFetchOk < 15000;
     pill.className = "pill" + (ok ? " on" : ""); pill.textContent = ok ? "LIVE" : "DISCONNECTED";
@@ -651,12 +1080,14 @@ if (FEED) {
   setInterval(updateNow, 1000);   // keeps "updated 3 s ago" ticking between pushes
   startStream();
 } else {
+  // The auto-refresh checkbox was removed from the header (title/status-only per request); the static
+  // (non-live, single-snapshot) build's reload-on-interval capability stays wired to whatever was last
+  // saved to localStorage ("al_auto") even without a visible toggle, rather than silently breaking.
   let autoOn = false; try { autoOn = localStorage.getItem("al_auto") === "1"; } catch (e) {}
-  $("#auto").checked = autoOn;
-  $("#auto").onchange = (e) => { try { localStorage.setItem("al_auto", e.target.checked ? "1" : "0"); } catch (err) {} };
-  setInterval(() => { if ($("#auto").checked) location.reload(); }, 60000);
+  setInterval(() => { if (autoOn) location.reload(); }, 60000);
 }
 refresh();
+loadGameData(); // one-time, cached by the browser's normal HTTP cache - not re-fetched on every refresh
 </script>
 </body>
 </html>

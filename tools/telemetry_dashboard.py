@@ -9,9 +9,16 @@
 Gold: the game reports gold moved between your own characters (merchant patrol offloading), and this
 tool subtracts it, so gold per hour is real income minus real spending, never counted twice.
 
---serve is loopback-only. Pushes are accepted only from https://adventure.land (add more with
---allow-origin) and only with the secret in data/live_secret.txt; the tool also writes that secret to
-the gitignored slot file adventureland/codes/LiveConfig.8.js so the game can read it.
+Viewing the dashboard (GET: the page, /api/data, /api/stream) has no login/secret and no Host
+restriction - anyone with the URL can see your live account data (gold, position, bank contents, kill
+stats), including through a tunnel (e.g. cloudflared) whose hostname changes every run. That's
+intentional: none of that is treated as sensitive here. What IS protected is writing - POST /live, the
+one endpoint that can inject telemetry or change recorded state - which requires a loopback (or
+--allow-host'd) Host header, an allowed Origin (https://adventure.land by default; add more with
+--allow-origin), AND the secret in data/live_secret.txt (also written to the gitignored slot file
+adventureland/codes/LiveConfig.8.js so the game can read it). In normal operation --allow-host is never
+needed even behind a tunnel, since the game's own push always targets http://127.0.0.1 directly, never
+the tunnel's hostname.
 
 data/ and dashboard/ are gitignored: they contain your account's data. History is only recorded while
 --serve is running (there is no other data source), so gaps exist for any stretch the receiver was down.
@@ -37,12 +44,15 @@ DEFAULT_ORIGINS = ("https://adventure.land", "https://www.adventure.land")
 RANGES = {"1h": (3600e3, 60e3), "6h": (6 * 3600e3, 60e3), "24h": (24 * 3600e3, 300e3),
           "7d": (7 * 86400e3, 1800e3), "all": (None, 3600e3)}
 NUM_KEYS = ("lv", "xp", "mx", "g", "hp", "mhp", "mp", "mmp", "pd", "dmg", "hl", "kb", "dt", "gs", "gr", "tk", "hr", "hpp", "mpp", "x", "y", "cc", "ccm", "ping", "xpm", "goldm", "luckm", "su")
-STR_KEYS = ("c", "m", "md", "tg", "sv")
+STR_KEYS = ("c", "m", "md", "tg", "sv", "skin")  # skin = dashboard character-portrait rendering (see clean_cx)
 MAP_KEYS = ("dr", "tkm", "km", "bf")  # name -> number maps: drops, damage taken by monster type, kills by monster type
 STAT_KEYS = ("str", "int", "dex", "vit", "attack", "frequency", "speed", "range", "armor", "resistance",
              "apiercing", "rpiercing", "evasion", "reflection", "crit", "lifesteal", "manasteal", "dreturn", "mp_cost")
 EQUIP_SLOTS = ("mainhand", "offhand", "helmet", "chest", "pants", "shoes", "gloves", "cape", "belt",
                "ring1", "ring2", "earring1", "earring2", "amulet", "orb")
+GEARUP_NUM_KEYS = ("spend", "cap", "blocked", "banked", "need", "oldest")
+BANK_MAX_SLOTS = 42
+BANK_MAX_PACKS = 16  # generous cap on a malformed/oversized payload; the account has 2 packs today
 
 
 # ---------------------------------------------------------------- files
@@ -74,7 +84,8 @@ def trade_key(t):
 # ---------------------------------------------------------------- aggregation
 def blank_char():
     return {"xp": 0, "g": 0, "ge": 0, "dmg": 0, "hl": 0, "kb": 0, "dt": 0, "hp": 0, "mp": 0,
-            "up": 0.0, "fs": 0.0, "pd": 0, "pn": 0, "dr": {}, "tk": 0, "hr": 0, "tkm": {}, "km": {}, "ccm": 0}
+            "up": 0.0, "fs": 0.0, "pd": 0, "pn": 0, "dr": {}, "tk": 0, "hr": 0, "tkm": {}, "km": {}, "ccm": 0,
+            "pingSum": 0, "pingN": 0}
 
 
 def build_buckets(samples, trades, bucket_ms=BUCKET_MS):
@@ -126,6 +137,9 @@ def build_buckets(samples, trades, bucket_ms=BUCKET_MS):
                 for item, n in (r.get("dr") or {}).items():
                     c["dr"][item] = c["dr"].get(item, 0) + n
                 c["ccm"] = max(c["ccm"], r.get("ccm") or 0)
+                if r.get("ping") is not None:
+                    c["pingSum"] += r["ping"]
+                    c["pingN"] += 1
                 c["tk"] += r.get("tk") or 0
                 c["hr"] += r.get("hr") or 0
                 for key in ("tkm", "km"):
@@ -149,7 +163,7 @@ def build_buckets(samples, trades, bucket_ms=BUCKET_MS):
     return out, chars
 
 
-def build_data(samples, trades, bucket_ms=BUCKET_MS, title="Adventure Land farm dashboard", now_rows=None, events=None):
+def build_data(samples, trades, bucket_ms=BUCKET_MS, title="Derstn's AdventureLand Status", now_rows=None, events=None):
     if not now_rows:  # static builds: the newest sample per character stands in for the live state
         newest = {}
         for r in samples:
@@ -169,9 +183,10 @@ def render_page(data, feed):
     return template.replace("__DATA__", blob).replace("__FEED__", json.dumps(feed))
 
 
-def build_dashboard(samples, trades, out_path, title="Adventure Land farm dashboard", events=None, upgrades=None):
+def build_dashboard(samples, trades, out_path, title="Derstn's AdventureLand Status", events=None, upgrades=None, bank_rows=None):
     data = build_data(samples, trades, BUCKET_MS, title, None, events)
     data["upgradeSlots"] = upgrade_slot_stats(upgrades or [])
+    data["bank"] = build_bank_packs(bank_rows or [])
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(render_page(data, None))
@@ -180,7 +195,7 @@ def build_dashboard(samples, trades, out_path, title="Adventure Land farm dashbo
 
 # ---------------------------------------------------------------- demo data
 def make_demo(hours=10):
-    """Returns (samples, trades, events, upgrades)."""
+    """Returns (samples, trades, events, upgrades, bank_rows)."""
     # Synthetic but plausible data so the dashboard can be previewed without any real telemetry.
     rnd = random.Random(7)
     now = int(time.time() * 1000)
@@ -221,6 +236,18 @@ def make_demo(hours=10):
         "SuperSellin": {"str": 15, "int": 15, "dex": 15, "vit": 20, "attack": 40, "frequency": 1.0,
                         "speed": 100, "range": 20, "armor": 50, "resistance": 50, "apiercing": 0, "rpiercing": 0,
                         "evasion": 3, "reflection": 0, "crit": 0, "lifesteal": 0, "manasteal": 0, "dreturn": 0, "mp_cost": 10}
+    }
+    # Base cosmetic skin + active cosmetics per character, so the demo dashboard actually exercises
+    # the hotlinked character-portrait compositor (see [[adventureland-respect-game-art]]). Real values
+    # (skins and place-keyed cx objects) captured from the actual account's live data this session -
+    # character.cx is a place-keyed OBJECT in practice ({"hair":"...", "hat":"...", ...}), not the flat
+    # array data-character.md's doc example shows (see clean_cx/cxArrayToPlaces for why both are handled).
+    demo_skin = {"DerstnTanks": "marmor6d", "Derstn": "mranger2", "DerstnHeals": "marmor12e", "SuperSellin": "marmor12b"}
+    demo_cx = {
+        "DerstnTanks": {"head": "makeup117"},
+        "Derstn": {"hair": "hairdo206"},
+        "DerstnHeals": {"head": "makeup117", "hair": "hairdo402"},
+        "SuperSellin": {"hair": "hairdo521", "head": "makeup117", "hat": "hat404"},
     }
     samples, trades, events = [], [], []
     pending_offload = 0
@@ -266,7 +293,19 @@ def make_demo(hours=10):
                    "hpp": s["hpp"], "mpp": s["mpp"], "tk": tk, "hr": hr, "tkm": tkm, "km": km,
                    "ping": rnd.randint(2, 6), "xpm": 2.35, "goldm": 1.35, "luckm": 1.24, "sv": "US III", "su": t - 4300000,
                    "bf": {"mluck": 3100, "encouragement_returning": 6000000}, "cc": round(rnd.uniform(5, 60), 1), "ccm": round(rnd.uniform(25, 150) if cls != "merchant" else rnd.uniform(8, 30), 1),
-                   "eq": demo_gear.get(name, {}), "st": demo_stats.get(name, {})}
+                   "eq": demo_gear.get(name, {}), "st": demo_stats.get(name, {}),
+                   "skin": demo_skin.get(name), "cx": demo_cx.get(name, [])}
+            if cls == "merchant":
+                row["gu"] = {"spend": 62000, "cap": 150000, "blocked": 0, "item": "pants",
+                             "banked": 1, "need": 2, "oldest": t - 22 * 60000,
+                             "climb": {"item": "pants", "gold": 18400, "items": 1,
+                                       "scrolls": {"scroll0": 4}, "attempts": 4, "startedAt": t - 8 * 60000},
+                             "history": [
+                                 {"item": "coat", "gold": 287000, "items": 3, "scrolls": {"scroll0": 21, "scroll1": 5},
+                                  "attempts": 24, "startedAt": t - 300 * 60000, "finishedAt": t - 180 * 60000},
+                                 {"item": "coat", "gold": 341000, "items": 4, "scrolls": {"scroll0": 25, "scroll1": 6},
+                                  "attempts": 29, "startedAt": t - 178 * 60000, "finishedAt": t - 30 * 60000},
+                             ]}
             if cls != "merchant":
                 row["pd"] = int(dmg / 60 * rnd.uniform(0.9, 1.1))
                 if rnd.random() < 0.01:
@@ -309,7 +348,21 @@ def make_demo(hours=10):
         upgrades.append({"t": ut, "slot": slot, "item": item, "level": level, "scroll": scroll,
                          "chance": chance, "success": roll < chance, "roll": round(roll, 4)})
         ut += rnd.randint(20000, 180000)
-    return samples, trades, events, upgrades
+
+    # A couple of synthetic bank snapshots (items0 = crafting materials, items1 = gear-up's finished
+    # +9 drop-off), partially filled, so the demo's Bank panel has tabs and tiles to show.
+    def demo_pack(entries):
+        slots = [None] * 42
+        for i, (name, level, q) in entries:
+            slots[i] = {"n": name, "l": level, "q": q}
+        return slots
+    bank_rows = [
+        {"t": now - 3600000, "packs": {
+            "items0": demo_pack([(0, ("stramulet", 0, 1)), (1, ("dexamulet", 0, 1)), (5, ("cscroll0", 0, 12)), (6, ("scroll0", 0, 4))]),
+            "items1": demo_pack([(0, ("coat", 9, 1)), (1, ("pants", 9, 1))]),
+        }},
+    ]
+    return samples, trades, events, upgrades, bank_rows
 
 
 # ---------------------------------------------------------------- live receiver + dashboard server
@@ -333,7 +386,29 @@ def clean_row(r):
     eq = clean_equip(r.get("eq"))
     if eq:
         out["eq"] = eq
+    gu = clean_gearup(r.get("gu"))
+    if gu:
+        out["gu"] = gu
+    cx = clean_cx(r.get("cx"))
+    if cx:
+        out["cx"] = cx
     return out
+
+
+def clean_cx(cx):
+    """Active cosmetic ids (character.cx - see clean_row's "skin" for the base sprite). Real live data
+    (captured from the official /player/<name> page's own data-cx attributes, e.g. {"hair":"hairdo206"})
+    confirmed this is a place-keyed OBJECT whenever more than one slot is active, despite the
+    data-character.md doc's array example (cx: ["santahat"]) - both shapes are accepted here rather
+    than assuming one; an earlier version only accepted the list shape and silently dropped every real
+    character's cx as a result."""
+    if isinstance(cx, list):
+        out = [str(c)[:24] for c in cx[:8] if isinstance(c, str) and c]
+        return out or None
+    if isinstance(cx, dict):
+        out = {str(k)[:16]: str(v)[:24] for k, v in list(cx.items())[:12] if isinstance(v, str) and v}
+        return out or None
+    return None
 
 
 def clean_map(m):
@@ -369,6 +444,46 @@ def clean_equip(eq):
         if isinstance(it.get("s"), str):
             clean["s"] = it["s"][:8]
         out[slot] = clean
+    return out or None
+
+
+GEARUP_CLIMB_NUM_KEYS = ("gold", "items", "attempts", "startedAt", "finishedAt")
+
+
+def clean_climb(c):
+    if not isinstance(c, dict) or not isinstance(c.get("item"), str):
+        return None
+    out = {"item": c["item"][:24]}
+    for k in GEARUP_CLIMB_NUM_KEYS:
+        v = c.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[k] = v
+    scrolls = c.get("scrolls")
+    if isinstance(scrolls, dict):
+        clean_scrolls = {str(k)[:16]: v for k, v in list(scrolls.items())[:8]
+                          if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        if clean_scrolls:
+            out["scrolls"] = clean_scrolls
+    return out
+
+
+def clean_gearup(gu):
+    if not isinstance(gu, dict):
+        return None
+    out = {}
+    for k in GEARUP_NUM_KEYS:
+        v = gu.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[k] = v
+    if isinstance(gu.get("item"), str):
+        out["item"] = gu["item"][:24]
+    climb = clean_climb(gu.get("climb"))
+    if climb:
+        out["climb"] = climb
+    if isinstance(gu.get("history"), list):
+        history = [c for c in (clean_climb(x) for x in gu["history"][:10]) if c]
+        if history:
+            out["history"] = history
     return out or None
 
 
@@ -428,14 +543,26 @@ def clean_upgrade_row(r):
 # 00.00 reveal (all four decimal digits zero) versus a roll above 96.3%.
 ROLL_ZERO_MAX = 0.00005   # roll < this counts as a "00.00" (the boosted-roll floor branch always lands here)
 ROLL_HIGH_MIN = 0.963
+# Attempts to reach level 1/2/3 (pre-attempt level 0/1/2) run at ~100%/98%/95% base chance - close
+# enough to guaranteed that they carry almost no chance-discriminating signal for the win-rate-vs-
+# expected ratio, but every fresh item purchase (including every rebuy after a real failure) has to
+# pass through them again, so they accumulate in huge volume. Folding them into that ratio let tiny
+# per-attempt rounding/variance at near-100% chance compound over hundreds of low-level rolls into a
+# real skew - confirmed in practice: some slots showed >100% relative win rate, which is only possible
+# from noise at this volume, not a real signal. Excluded from the win-rate inputs (n/expected/actual)
+# below; the roll-decode buckets (zero/high) are a DIFFERENT signal built from the roll value itself,
+# not the chance, so low-level rolls are still just as informative there and stay included. The
+# underlying rows are untouched either way - only this aggregation changed, so no data was lost or
+# needs re-collecting.
+LUCKY_MIN_LEVEL = 3
 
 
 def upgrade_slot_stats(rows):
-    """Per-slot (0-41): attempt count, summed shown chance, actual successes, and (when the decoded
-    roll got through) zero/high roll counts - the same win-rate-vs-expected and roll-bucket signals
-    the community tool uses, kept per slot so either can point at the same candidate. Offering-only
-    attempts (no scroll) are excluded: the slot bonus never applies to them, so mixing them in would
-    only dilute the signal."""
+    """Per-slot (0-41): attempt count, summed shown chance, actual successes (win-rate-vs-expected
+    inputs, level >= LUCKY_MIN_LEVEL only - see its comment), and roll-decode zero/high counts (ALL
+    scroll-based attempts regardless of level - a different signal, from the roll value itself).
+    Offering-only attempts (no scroll) are excluded from everything: the slot bonus never applies to
+    them, so mixing them in would only dilute both signals."""
     slots = [{"slot": i, "n": 0, "expected": 0.0, "actual": 0, "rolls": 0, "zero": 0, "high": 0}
              for i in range(UPGRADE_SLOTS)]
     for r in rows:
@@ -445,11 +572,12 @@ def upgrade_slot_stats(rows):
         if not isinstance(i, int) or not (0 <= i < UPGRADE_SLOTS):
             continue
         b = slots[i]
-        b["n"] += 1
-        if isinstance(r.get("chance"), (int, float)):
-            b["expected"] += r["chance"]
-        if r.get("success"):
-            b["actual"] += 1
+        if not (isinstance(r.get("level"), int) and r["level"] < LUCKY_MIN_LEVEL):
+            b["n"] += 1
+            if isinstance(r.get("chance"), (int, float)):
+                b["expected"] += r["chance"]
+            if r.get("success"):
+                b["actual"] += 1
         roll = r.get("roll")
         if isinstance(roll, (int, float)):
             b["rolls"] += 1
@@ -461,6 +589,63 @@ def upgrade_slot_stats(rows):
         b["expected"] = round(b["expected"], 2)
         b["relative"] = round(100.0 * b["actual"] / b["expected"], 1) if b["expected"] > 0 else None
     return slots
+
+
+# Bank pack snapshots: character.bank[pack][i] (0-41) mirrors character.items - see the `banking` doc
+# and telemetrySnapshotBank in Telemetry.js. A pushed row is {t, packs: {packName: [slot-or-null x42]}};
+# a slot is either null (empty) or {n, l?, q?} (name/level/qty), same trimmed shape clean_equip already
+# uses for equipment. Unlike upgrade rows (an append-only log), a bank row is a full-pack snapshot, so
+# storage keeps only the latest one per pack, not a growing history (see LiveState.add_bank).
+def clean_bank_slot(it):
+    if it is None:
+        return None
+    if not isinstance(it, dict) or not isinstance(it.get("n"), str) or not it["n"]:
+        return None
+    out = {"n": it["n"][:24]}
+    if isinstance(it.get("l"), (int, float)) and not isinstance(it.get("l"), bool):
+        out["l"] = int(it["l"])
+    if isinstance(it.get("q"), (int, float)) and not isinstance(it.get("q"), bool):
+        out["q"] = int(it["q"])
+    return out
+
+
+def clean_bank_pack(slots):
+    if not isinstance(slots, list):
+        return None
+    out = [clean_bank_slot(it) for it in slots[:BANK_MAX_SLOTS]]
+    while len(out) < BANK_MAX_SLOTS:
+        out.append(None)
+    return out
+
+
+def clean_bank_row(r):
+    if not isinstance(r, dict) or not isinstance(r.get("t"), (int, float)):
+        return None
+    packs_in = r.get("packs")
+    if not isinstance(packs_in, dict):
+        return None
+    packs = {}
+    for name, slots in list(packs_in.items())[:BANK_MAX_PACKS]:
+        if not isinstance(name, str) or not name:
+            continue
+        clean = clean_bank_pack(slots)
+        if clean is not None:
+            packs[name[:16]] = clean
+    if not packs:
+        return None
+    return {"t": r["t"], "packs": packs}
+
+
+def build_bank_packs(rows):
+    """Replay a bank.jsonl-shaped row list into {packName: {slots: [...42...], t}} - later rows
+    overwrite earlier ones per-pack (a snapshot, not an incremental delta), so this is the same
+    "latest wins" logic LiveState.add_bank applies live, reusable for the static (non --serve) build."""
+    packs = {}
+    for row in rows:
+        if isinstance(row, dict) and isinstance(row.get("packs"), dict) and isinstance(row.get("t"), (int, float)):
+            for name, slots in row["packs"].items():
+                packs[name] = {"slots": slots, "t": row["t"]}
+    return packs
 
 
 class LiveState:
@@ -476,6 +661,10 @@ class LiveState:
         self.events_path = os.path.join(data_dir, "events.jsonl")
         self.upgrades_path = os.path.join(data_dir, "upgrades.jsonl")
         self.upgrades = load_jsonl(self.upgrades_path)
+        self.bank_path = os.path.join(data_dir, "bank.jsonl")
+        # Latest-per-pack, not the raw row list (bank.jsonl is a history log for debugging; the dashboard
+        # only ever wants the newest snapshot of each pack) - replayed once at startup, updated live in add_bank.
+        self.bank_packs = build_bank_packs(load_jsonl(self.bank_path))
         self.cond = threading.Condition()
         self.version = 0
         self.events = load_jsonl(self.events_path)[-500:]
@@ -548,7 +737,15 @@ class LiveState:
             self.cache.clear()
         self.notify()
 
-    def data(self, range_key, title="Adventure Land farm dashboard (LIVE)"):
+    def add_bank(self, row):
+        with self.lock:
+            for name, slots in row["packs"].items():
+                self.bank_packs[name] = {"slots": slots, "t": row["t"]}
+            append_jsonl(self.bank_path, [row])
+            self.cache.clear()
+        self.notify()
+
+    def data(self, range_key, title="Derstn's AdventureLand Status"):
         window, bucket_ms = RANGES.get(range_key, RANGES["6h"])
         now = int(time.time() * 1000)
         hit = self.cache.get(range_key)
@@ -563,6 +760,7 @@ class LiveState:
         data = build_data(rows, trades, int(bucket_ms), title, now_rows, events)
         with self.lock:
             data["upgradeSlots"] = upgrade_slot_stats(self.upgrades)
+            data["bank"] = self.bank_packs
         self.cache[range_key] = (now, data)
         return data
 
@@ -600,15 +798,23 @@ def ensure_live_config(port, secret):
     return path
 
 
-def run_server(port, origins, secret, state):
+def run_server(port, origins, secret, state, allowed_hosts=()):
     stats = {"rejected": Counter(), "bad": 0, "last_report": time.time()}
+    # GET (the dashboard page, /api/data, /api/stream) has no Host restriction at all - viewing is
+    # meant to be fine from anywhere (e.g. behind a tunnel whose hostname changes every run), and
+    # nothing sensitive to write-access lives on that side. POST /live (the one endpoint that can
+    # change account state / inject telemetry) is the one that matters: it still requires a loopback
+    # (or explicitly --allow-host'd) Host header, PLUS the Origin check, PLUS the X-AL-Key secret - and
+    # in normal operation it never needs --allow-host anyway, since the game's own push always targets
+    # http://127.0.0.1 directly (see LiveConfig.8.js), never the tunnel.
+    host_allowlist = {"127.0.0.1:%d" % port, "localhost:%d" % port} | set(allowed_hosts)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
 
-        def _host_ok(self):
-            return (self.headers.get("Host") or "") in ("127.0.0.1:%d" % port, "localhost:%d" % port)
+        def _post_host_ok(self):
+            return (self.headers.get("Host") or "") in host_allowlist
 
         def _cors(self, origin):
             self.send_header("Access-Control-Allow-Origin", origin)
@@ -638,8 +844,6 @@ def run_server(port, origins, secret, state):
                 self._send(403)
 
         def do_GET(self):
-            if not self._host_ok():
-                return self._send(403)
             u = urlparse(self.path)
             if u.path == "/":
                 page = render_page(state.data("6h"), "/api/data")
@@ -679,7 +883,7 @@ def run_server(port, origins, secret, state):
                 pass  # the browser tab closed
 
         def do_POST(self):
-            if urlparse(self.path).path != "/live" or not self._host_ok():
+            if urlparse(self.path).path != "/live" or not self._post_host_ok():
                 return self._send(404)
             origin = self.headers.get("Origin")
             if origin not in origins:
@@ -716,6 +920,11 @@ def run_server(port, origins, secret, state):
                         " +%s" % row["level"] if row.get("level") else "",
                         ("%.0f%%" % (row["chance"] * 100)) if "chance" in row else "?",
                         "SUCCESS" if row["success"] else "fail"), flush=True)
+            elif isinstance(msg, dict) and msg.get("k") == "bank":
+                row = clean_bank_row(msg.get("row"))
+                if row and abs(row["t"] - now) < 5 * 60 * 1000:
+                    state.add_bank(row)
+                    print("%s  BANK  snapshot: %s" % (time.strftime("%H:%M:%S"), ", ".join(sorted(row["packs"]))), flush=True)
             self._send(204, origin=origin)
 
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
@@ -735,7 +944,7 @@ def run_server(port, origins, secret, state):
                 print("%s  pushes received (since start): %s%s" % (time.strftime("%H:%M:%S"), seen, extra), flush=True)
 
     threading.Thread(target=background, daemon=True).start()
-    print("LIVE dashboard: http://127.0.0.1:%d/   (loopback only, Ctrl+C to stop)" % port, flush=True)
+    print("LIVE dashboard: http://127.0.0.1:%d/   (Ctrl+C to stop)" % port, flush=True)
     print("Accepting pushes from: %s" % ", ".join(sorted(origins)), flush=True)
     try:
         srv.serve_forever()
@@ -754,6 +963,13 @@ def main():
     ap.add_argument("--data-dir", metavar="PATH", help="testing only: use this folder instead of data/ (also skips writing LiveConfig)")
     ap.add_argument("--allow-origin", action="append", default=[], metavar="ORIGIN",
                     help="extra origin allowed to push (default: https://adventure.land)")
+    ap.add_argument("--allow-host", action="append", default=[], metavar="HOST[:PORT]",
+                    help="extra Host header allowed for POST /live (telemetry writes). Viewing the "
+                         "dashboard (GET) never needs this - it's open regardless of Host, including "
+                         "through a tunnel whose hostname changes every run. Writes stay protected by "
+                         "the Origin check and the X-AL-Key secret either way; this flag only matters "
+                         "if you ever want the game's own push to reach the server via something other "
+                         "than loopback, which isn't the normal setup.")
     args = ap.parse_args()
 
     if args.serve:
@@ -764,13 +980,16 @@ def main():
             print("Game-side config: %s (a private slot; the VS Code sync uploads it as slot %d)" % (os.path.relpath(cfg, ROOT), LIVE_SLOT))
         elif not args.data_dir:
             print("No adventureland/codes folder here: create LiveConfig.%d.js yourself (see codes/LiveConfig.example.js)" % LIVE_SLOT)
+        print("Viewing is open to anyone with a URL to this server (no login) - e.g. behind a tunnel like cloudflared. Writes (POST /live) stay secret-protected regardless.")
+        if args.allow_host:
+            print("POST /live also accepts these extra hosts: %s" % ", ".join(args.allow_host))
         state = LiveState(data_dir)
-        run_server(args.serve, set(DEFAULT_ORIGINS) | set(args.allow_origin), secret, state)
+        run_server(args.serve, set(DEFAULT_ORIGINS) | set(args.allow_origin), secret, state, args.allow_host)
         return
 
     if args.demo:
-        samples, trades, events, upgrades = make_demo()
-        n = build_dashboard(samples, trades, os.path.join(ROOT, "dashboard", "demo.html"), "DEMO data (synthetic)", events, upgrades)
+        samples, trades, events, upgrades, bank_rows = make_demo()
+        n = build_dashboard(samples, trades, os.path.join(ROOT, "dashboard", "demo.html"), "DEMO data (synthetic)", events, upgrades, bank_rows)
         print("demo dashboard: %d buckets -> dashboard/demo.html" % n)
         return
 
@@ -780,9 +999,10 @@ def main():
         trades = load_jsonl(os.path.join(data_dir, "trades.jsonl"))
         events = load_jsonl(os.path.join(data_dir, "events.jsonl"))[-200:]
         upgrades = load_jsonl(os.path.join(data_dir, "upgrades.jsonl"))
+        bank_rows = load_jsonl(os.path.join(data_dir, "bank.jsonl"))
         if not samples:
             print("no data/live.jsonl yet (run --serve while CODE is running to start recording)")
-        n = build_dashboard(samples, trades, os.path.join(ROOT, "dashboard", "index.html"), events=events, upgrades=upgrades)
+        n = build_dashboard(samples, trades, os.path.join(ROOT, "dashboard", "index.html"), events=events, upgrades=upgrades, bank_rows=bank_rows)
         print("%s  %d samples, %d buckets, %d sales, %d upgrade attempts -> dashboard/index.html"
               % (time.strftime("%H:%M:%S"), len(samples), n, len(trades), len(upgrades)))
 
